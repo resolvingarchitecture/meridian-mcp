@@ -45,7 +45,7 @@ Add to your MCP client config:
 }
 ```
 
-Get your API key at [resolvingarchitecture.io/archguard/dashboard](https://resolvingarchitecture.io/v1/archguard/dashboard).
+Get your API key at [resolvingarchitecture.io/v1/archguard/dashboard](https://resolvingarchitecture.io/v1/archguard/dashboard).
 
 ## Tools
 
