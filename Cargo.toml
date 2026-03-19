@@ -1,0 +1,62 @@
+[package]
+name        = "archguard-mcp"
+version     = "0.1.0"
+edition     = "2021"
+description = "ArchGuard — AI architectural review agent MCP server"
+license     = "MIT"
+repository  = "https://github.com/resolvingarchitecture/archguard-mcp"
+keywords    = ["mcp", "architecture", "code-review", "ai"]
+
+[[bin]]
+name = "archguard-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# MCP protocol
+rmcp            = { version = "0.1",  features = ["server", "transport-io"] }
+
+# Async runtime
+tokio           = { version = "1",    features = ["full"] }
+
+# Serialization
+serde           = { version = "1",    features = ["derive"] }
+serde_json      = "1"
+
+# File system traversal — respects .gitignore automatically
+ignore          = "0.4"
+walkdir         = "2"
+
+# Import graph / dependency analysis
+petgraph        = "0.6"
+
+# Tree-sitter for import parsing (language-agnostic, handles broken syntax)
+tree-sitter                = "0.22"
+tree-sitter-typescript     = "0.21"
+tree-sitter-javascript     = "0.21"
+tree-sitter-python         = "0.21"
+tree-sitter-java           = "0.21"
+
+# HTTP client for backend API calls
+reqwest         = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Embedded KV cache — persists arch model to ~/.cache/archguard/
+sled            = "0.34"
+
+# Utilities
+anyhow          = "1"
+dirs            = "5"
+rayon           = "1"           # parallel file scanning
+sha2            = "0.10"        # directory structure hashing for cache keys
+hex             = "0.4"
+tracing         = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile        = "3"
+assert_fs       = "1"
+
+[profile.release]
+opt-level = 3
+lto       = true
+strip     = true                # lean binary — ~4-6MB shipped
+codegen-units = 1
