@@ -1,6 +1,6 @@
 # archguard-mcp
 
-Open-source MCP server for [ArchGuard](https://resolvingarchitecture.io/archguard) — real-time
+Open-source MCP server for [ArchGuard](https://resolvingarchitecture.io/archguard.html) — real-time
 architectural violation detection powered by AI.
 
 ## Install
@@ -10,7 +10,7 @@ architectural violation detection powered by AI.
 cargo install archguard-mcp
 
 # Via install script (macOS / Linux)
-curl -fsSL https://resolvingarchitecture.io/archguard/install.sh | sh
+curl -fsSL https://resolvingarchitecture.io/v1/archguard/install.sh | sh
 
 # Or download a binary from GitHub Releases
 ```
@@ -45,7 +45,7 @@ Add to your MCP client config:
 }
 ```
 
-Get your API key at [resolvingarchitecture.io/archguard/dashboard](https://resolvingarchitecture.io/archguard/dashboard).
+Get your API key at [resolvingarchitecture.io/archguard/dashboard](https://resolvingarchitecture.io/v1/archguard/dashboard).
 
 ## Tools
 
