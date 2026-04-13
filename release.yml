@@ -14,16 +14,16 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            artifact: archguard-mcp-linux-x86_64
+            artifact: meridian-mcp-linux-x86_64
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact: archguard-mcp-macos-x86_64
+            artifact: meridian-mcp-macos-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: archguard-mcp-macos-arm64
+            artifact: meridian-mcp-macos-arm64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: archguard-mcp-windows-x86_64.exe
+            artifact: meridian-mcp-windows-x86_64.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -43,13 +43,13 @@ jobs:
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
         run: |
-          cp target/${{ matrix.target }}/release/archguard-mcp \
+          cp target/${{ matrix.target }}/release/meridian-mcp \
              ${{ matrix.artifact }}
 
       - name: Rename binary (Windows)
         if: runner.os == 'Windows'
         run: |
-          copy target\${{ matrix.target }}\release\archguard-mcp.exe `
+          copy target\${{ matrix.target }}\release\meridian-mcp.exe `
                ${{ matrix.artifact }}
 
       - name: Upload artifact
@@ -68,8 +68,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            archguard-mcp-linux-x86_64/archguard-mcp-linux-x86_64
-            archguard-mcp-macos-x86_64/archguard-mcp-macos-x86_64
-            archguard-mcp-macos-arm64/archguard-mcp-macos-arm64
-            archguard-mcp-windows-x86_64.exe/archguard-mcp-windows-x86_64.exe
+            meridian-mcp-linux-x86_64/meridian-mcp-linux-x86_64
+            meridian-mcp-macos-x86_64/meridian-mcp-macos-x86_64
+            meridian-mcp-macos-arm64/meridian-mcp-macos-arm64
+            meridian-mcp-windows-x86_64.exe/meridian-mcp-windows-x86_64.exe
           generate_release_notes: true

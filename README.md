@@ -1,16 +1,16 @@
-# archguard-mcp
+# meridian-mcp
 
-Open-source MCP server for [ArchGuard](https://resolvingarchitecture.io/archguard.html) — real-time
+Open-source MCP server for [Meridian](https://resolvingarchitecture.io/meridian) — real-time
 architectural violation detection powered by AI.
 
 ## Install
 
 ```bash
 # Via cargo
-cargo install archguard-mcp
+cargo install meridian-mcp
 
 # Via install script (macOS / Linux)
-curl -fsSL https://resolvingarchitecture.io/v1/archguard/install.sh | sh
+curl -fsSL https://resolvingarchitecture.io/meridian/install.sh | sh
 
 # Or download a binary from GitHub Releases
 ```
@@ -24,9 +24,9 @@ Add to your MCP client config:
 {
   "mcpServers": {
     "archguard": {
-      "command": "archguard-mcp",
+      "command": "meridian-mcp",
       "env": {
-        "ARCHGUARD_API_KEY": "ag_live_..."
+        "MERIDIAN_API_KEY": "m_live_..."
       }
     }
   }
@@ -37,15 +37,15 @@ Add to your MCP client config:
 ```json
 {
   "archguard": {
-    "command": "archguard-mcp",
+    "command": "meridian-mcp",
     "env": {
-      "ARCHGUARD_API_KEY": "ag_live_..."
+      "MERIDIAN_API_KEY": "m_live_..."
     }
   }
 }
 ```
 
-Get your API key at [resolvingarchitecture.io/v1/archguard/dashboard](https://resolvingarchitecture.io/v1/archguard/dashboard).
+Get your API key at [resolvingarchitecture.io/meridian](https://resolvingarchitecture.io/meridian).
 
 ## Tools
 
@@ -91,15 +91,15 @@ Clears the cached architecture model. Use after major refactors.
 
 | Variable | Required | Default                                          | Description                                             |
 |---|---|--------------------------------------------------|---------------------------------------------------------|
-| `ARCHGUARD_API_KEY` | Yes | —                                                | Your API key from resolvingarchitecture.io/archguard/dashboard |
-| `ARCHGUARD_BACKEND_URL` | No | `https://resolvingarchitecture.io/archguard/api` | Backend URL                                             |
-| `ARCHGUARD_LOG` | No | `archguard_mcp=info`                             | Log level (to stderr)                                   |
+| `MERIDIAN_API_KEY` | Yes | —                                                | Your API key from resolvingarchitecture.io/meridian |
+| `MERIDIAN_BACKEND_URL` | No | `https://resolvingarchitecture.io/meridian/api` | Backend URL                                             |
+| `MERIDIAN_LOG` | No | `meridian_mcp=info`                             | Log level (to stderr)                                   |
 
 ## Development
 
 ```bash
-git clone https://github.com/resolvingarchitecture/archguard-mcp
-cd archguard-mcp
+git clone https://github.com/resolvingarchitecture/meridian-mcp
+cd meridian-mcp
 
 # Build debug binary
 cargo build
@@ -109,8 +109,8 @@ cargo test
 
 # Test locally with Cursor (point at debug binary)
 # In ~/.cursor/mcp.json:
-# "command": "/path/to/archguard-mcp/target/debug/archguard-mcp"
-# "env": { "ARCHGUARD_BACKEND_URL": "http://localhost:8080", ... }
+# "command": "/path/to/meridian-mcp/target/debug/meridian-mcp"
+# "env": { "MERIDIAN_BACKEND_URL": "http://localhost:8080", ... }
 ```
 
 ## Architecture
@@ -119,7 +119,7 @@ cargo test
 src/
   main.rs           — MCP server, tool registration
   agent.rs          — HTTP call to Java backend
-  cache.rs          — sled embedded cache (~/.cache/archguard/)
+  cache.rs          — sled embedded cache (~/.cache/meridian/)
   scanner/
     mod.rs          — scan() entry point, ArchModel definition
     walker.rs       — file system traversal, layer inference
