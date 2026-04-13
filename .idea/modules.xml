@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/archguard-mcp.iml" filepath="$PROJECT_DIR$/.idea/archguard-mcp.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/meridian-mcp.iml" filepath="$PROJECT_DIR$/.idea/meridian-mcp.iml" />
     </modules>
   </component>
 </project>
