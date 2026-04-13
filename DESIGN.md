@@ -42,16 +42,11 @@ The current Meridian architecture places the product intelligence in the backend
 - send file review payloads to the backend
 
 The backend currently exposes:
+- `GET /api/pricing/token`
 - `GET /api/payment/request/bitcoin`
 - `GET /api/payment/request/fiat`
-- `POST /api/payment/receive/dodo`
-- `POST /api/payment/receive/paddle`
-- `POST /api/payment/receive/cashapp`
 - `GET /api/payment/request/bitcoin/status/{address}`
 - `GET /api/payment/request/fiat/status/{id}`
-- `GET /api/pricing/review/intermediate`
-- `GET /api/pricing/review/full`
-- `GET /api/pricing/token`
 - `POST /api/skills/context`
 - `POST /api/skills/review/full/prompt`
 - `POST /api/skills/review/full`
