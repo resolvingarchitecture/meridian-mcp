@@ -20,6 +20,7 @@
     - [x] `meridian doctor`
     - [x] `meridian version`
 - [x] Add support for session authentication upon successful backend auth with API key
+- [ ] Ensure this mcp client tracks sats balance and makes user aware of inability to review due to insufficient balance
 - [ ] Improve error messages when backend auth fails, balance/usage policy blocks review, or the backend is unreachable
 - [ ] Add end-to-end smoke tests for `scan_project`, `review_file`, and `invalidate_cache`
 - [ ] Validate scan performance on large repositories
