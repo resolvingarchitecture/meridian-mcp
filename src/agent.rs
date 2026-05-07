@@ -50,8 +50,7 @@ pub async fn review(
     file_path: &str,
     content:   &str,
 ) -> Result<Vec<Finding>> {
-    let api_key      = std::env::var("MERIDIAN_API_KEY")
-        .context("MERIDIAN_API_KEY not set")?;
+    let api_key = crate::config::api_key()?;
     let backend_url  = std::env::var("MERIDIAN_BACKEND_URL")
         .unwrap_or_else(|_| "https://resolvingarchitecture.io/meridian/api".to_string());
 

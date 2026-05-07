@@ -10,7 +10,7 @@
 - [x] Replace remaining ArchGuard naming in code, packaging, configs, cache paths, logs, and user-facing messages with Meridian naming
 - [x] Rename server/runtime identifiers from ArchGuard-oriented names to Meridian-oriented names
 - [x] Align MCP server metadata, binary name, command name, and release artifacts with Meridian branding
-- [ ] Add CLI command dispatch while reusing the same scanner, cache, and backend client modules
+- [x] Add CLI command dispatch while reusing the same scanner, cache, and backend client modules
 - [ ] Implement or wire recommended CLI commands:
     - [ ] `meridian mcp`
     - [ ] `meridian scan [root_dir]`

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rmcp::{
     handler::server::tool::Parameters,
     model::ServerInfo,
@@ -6,10 +6,12 @@ use rmcp::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 mod agent;
 mod cache;
+mod config;
 mod scanner;
 
 // ── MCP Server ────────────────────────────────────────────────────────────────
@@ -141,6 +143,226 @@ impl ServerHandler for MeridianServer {
     }
 }
 
+// ── CLI ──────────────────────────────────────────────────────────────────────
+
+async fn run_cli(args: Vec<String>) -> Result<()> {
+    match args.get(1).map(String::as_str) {
+        None | Some("mcp") => run_mcp_server().await,
+        Some("scan") => {
+            let root = args.get(2).map(String::as_str).unwrap_or(".");
+            cli_scan(root)
+        }
+        Some("review") => {
+            let file_path = args
+                .get(2)
+                .context("usage: meridian review <file_path>")?;
+            cli_review(file_path).await
+        }
+        Some("cache") => match args.get(2).map(String::as_str) {
+            Some("clear") => {
+                let root = args.get(3).map(String::as_str).unwrap_or(".");
+                cli_cache_clear(root)
+            }
+            _ => {
+                anyhow::bail!("usage: meridian cache clear [root_dir]");
+            }
+        },
+        Some("config") => match (args.get(2).map(String::as_str), args.get(3).map(String::as_str)) {
+            (Some("set"), Some("api-key")) => {
+                let key = args
+                    .get(4)
+                    .context("usage: meridian config set api-key <key>")?;
+                cli_config_set_api_key(key)
+            }
+            _ => {
+                anyhow::bail!("usage: meridian config set api-key <key>");
+            }
+        },
+        Some("doctor") => cli_doctor(),
+        Some("version") | Some("--version") | Some("-V") => {
+            println!("meridian {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        Some("help") | Some("--help") | Some("-h") => {
+            print_help();
+            Ok(())
+        }
+        Some(command) => {
+            anyhow::bail!("unknown command: {command}\n\nRun `meridian help` for usage.");
+        }
+    }
+}
+
+fn cli_scan(root: &str) -> Result<()> {
+    let path = Path::new(root);
+
+    if !path.exists() {
+        anyhow::bail!("directory not found: {root}");
+    }
+
+    if !path.is_dir() {
+        anyhow::bail!("not a directory: {root}");
+    }
+
+    if let Some(model) = cache::get(root)? {
+        println!("{}", serde_json::to_string_pretty(&json!({
+            "status": "cached",
+            "model": model
+        }))?);
+        return Ok(());
+    }
+
+    let model = scanner::scan(path)
+        .with_context(|| format!("failed to scan project: {root}"))?;
+
+    cache::set(root, &model)
+        .with_context(|| format!("failed to cache architecture model for: {root}"))?;
+
+    println!("{}", serde_json::to_string_pretty(&json!({
+        "status": "ok",
+        "model": model
+    }))?);
+
+    Ok(())
+}
+
+async fn cli_review(file_path: &str) -> Result<()> {
+    let file = PathBuf::from(file_path);
+
+    if !file.exists() {
+        anyhow::bail!("file not found: {file_path}");
+    }
+
+    if !file.is_file() {
+        anyhow::bail!("not a file: {file_path}");
+    }
+
+    let content = std::fs::read_to_string(&file)
+        .with_context(|| format!("failed to read file: {file_path}"))?;
+
+    let root = std::env::current_dir()
+        .context("failed to determine current directory")?;
+
+    let root_str = root.to_string_lossy().to_string();
+
+    let model = match cache::get(&root_str)? {
+        Some(model) => model,
+        None => {
+            let model = scanner::scan(&root)
+                .with_context(|| format!("failed to scan project: {}", root.display()))?;
+            cache::set(&root_str, &model)?;
+            model
+        }
+    };
+
+    let findings = agent::review(&model, file_path, &content).await?;
+
+    println!("{}", serde_json::to_string_pretty(&json!({
+        "findings": findings
+    }))?);
+
+    Ok(())
+}
+
+fn cli_cache_clear(root: &str) -> Result<()> {
+    cache::invalidate(root)
+        .with_context(|| format!("failed to clear cache for: {root}"))?;
+
+    println!("{}", serde_json::to_string_pretty(&json!({
+        "status": "cache cleared",
+        "root": root
+    }))?);
+
+    Ok(())
+}
+
+fn cli_config_set_api_key(key: &str) -> Result<()> {
+    if !key.starts_with("m_live_") {
+        eprintln!("warning: Meridian API keys usually start with `m_live_`");
+    }
+
+    config::set_api_key(key)?;
+
+    println!("{}", serde_json::to_string_pretty(&json!({
+        "status": "ok",
+        "message": "API key saved",
+        "config_file": config::config_file_display_path()
+    }))?);
+
+    Ok(())
+}
+
+fn cli_doctor() -> Result<()> {
+    let env_api_key = std::env::var("MERIDIAN_API_KEY").ok();
+    let configured_api_key = config::load()?.api_key;
+
+    let api_key_status = if env_api_key.as_deref().is_some_and(|key| !key.trim().is_empty()) {
+        "set via MERIDIAN_API_KEY"
+    } else if configured_api_key.as_deref().is_some_and(|key| !key.trim().is_empty()) {
+        "set in local config"
+    } else {
+        "missing"
+    };
+
+    let backend_url = std::env::var("MERIDIAN_BACKEND_URL")
+        .unwrap_or_else(|_| "https://resolvingarchitecture.io/meridian/api".to_string());
+
+    println!("{}", serde_json::to_string_pretty(&json!({
+        "status": if api_key_status == "missing" { "warning" } else { "ok" },
+        "version": env!("CARGO_PKG_VERSION"),
+        "api_key": api_key_status,
+        "backend_url": backend_url,
+        "config_file": config::config_file_display_path()
+    }))?);
+
+    if api_key_status == "missing" {
+        eprintln!("warning: no API key configured. Run: meridian config set api-key <key>");
+    }
+
+    Ok(())
+}
+
+fn print_help() {
+    println!(
+        r#"Meridian local architecture review MCP server and CLI
+
+Usage:
+  meridian mcp
+  meridian scan [root_dir]
+  meridian review <file_path>
+  meridian cache clear [root_dir]
+  meridian config set api-key <key>
+  meridian doctor
+  meridian version
+  meridian help
+
+Environment:
+  MERIDIAN_API_KEY      API key, usually m_live_...
+  MERIDIAN_BACKEND_URL  Backend URL
+  MERIDIAN_LOG          Log level for stderr logs
+"#
+    );
+}
+
+async fn run_mcp_server() -> Result<()> {
+    info!("meridian starting in MCP mode (v{})", env!("CARGO_PKG_VERSION"));
+
+    if crate::config::api_key().is_err() {
+        eprintln!("ERROR: MERIDIAN_API_KEY environment variable not set and no local API key configured.");
+        eprintln!("Run: meridian config set api-key <key>");
+        eprintln!("Get your API key at https://resolvingarchitecture.io/meridian");
+        std::process::exit(1);
+    }
+
+    let server = MeridianServer;
+
+    use rmcp::service::serve_server;
+    use rmcp::transport::io::stdio;
+
+    serve_server(server, stdio()).await?;
+    Ok(())
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -154,21 +376,5 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    info!("meridian starting in MCP mode (v{})", env!("CARGO_PKG_VERSION"));
-
-    // Validate API key is set before accepting connections
-    if std::env::var("MERIDIAN_API_KEY").is_err() {
-        eprintln!("ERROR: MERIDIAN_API_KEY environment variable not set.");
-        eprintln!("Get your API key at https://resolvingarchitecture.io/meridian");
-        std::process::exit(1);
-    }
-
-    let server = MeridianServer;
-
-    // Stdio transport — Cursor/Claude Code spawn this process
-    use rmcp::service::serve_server;
-    use rmcp::transport::io::stdio;
-
-    serve_server(server, stdio()).await?;
-    Ok(())
+    run_cli(std::env::args().collect()).await
 }
