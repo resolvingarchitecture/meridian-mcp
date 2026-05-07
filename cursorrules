@@ -1,0 +1,75 @@
+You are working on meridian-mcp — the open-source Rust MCP server for
+Meridian, an AI architectural review agent for developers.
+
+## What this project is
+- A single Rust binary that developers install locally
+- Implements the MCP protocol over stdio (spawned by Cursor, Claude Code, VS Code)
+- Exposes three tools: scan_project, review_file, invalidate_cache
+- Scans codebases for architectural structure using tree-sitter
+- Calls the Java backend API for Claude-based review
+
+## What this project is NOT
+- It does NOT call Claude directly — all LLM calls go to the backend
+- It does NOT contain billing or auth logic
+- It is NOT the product IP — that lives in the Java backend
+
+## Crate choices — follow these, don't suggest alternatives
+- rmcp for MCP protocol (not a custom implementation)
+- tree-sitter for import parsing (not regex, not full compiler)
+- ignore crate for file walking (respects .gitignore automatically)
+- petgraph for import graph + topological sort
+- sled for embedded cache (no SQLite, no external DB)
+- rayon for parallel file scanning
+- reqwest + tokio for async HTTP to backend
+- anyhow for all error handling
+
+## Rust rules for this project
+- No unwrap() in library code — use ? or context() from anyhow
+- No panic in scanner code — malformed files must be skipped gracefully
+- All public types derive Serialize, Deserialize, Debug, Clone
+- Use OnceLock for singletons (HTTP client, sled DB)
+- Prefer rayon par_iter() for CPU-bound work (file scanning)
+- Use tokio only for async I/O (HTTP calls to backend)
+
+## Scanner rules
+- File system walk: paths only, no content — use walker.rs
+- Import parsing: tree-sitter only, handles broken syntax gracefully
+- Pattern detection: sample max 40 files, look for structural signatures
+- ADR harvesting: read first 8 lines only, don't load full docs
+- Cache key: SHA-256 of root path + directory structure fingerprint
+
+## MCP server rules
+- stdout is reserved for MCP JSON-RPC — never write to stdout directly
+- All logging goes to stderr via tracing
+- MERIDIAN_API_KEY must be set — exit with clear error message if missing
+- Tools must never panic — always return a JSON error value on failure
+- 30s timeout on all backend HTTP calls
+
+## Testing
+- Integration tests in tests/ use assert_fs TempDir fixtures
+- Every scanner module behaviour covered by scanner_test.rs
+- Tests must work offline — no real API calls in tests
+- Run: cargo test
+
+## Markdown edit application rules
+
+- Fenced code blocks are allowed and preferred in Markdown documents when they improve readability.
+- When editing an existing Markdown file, provide one applyable snippet per file whenever possible.
+- If the edit includes fenced code blocks, include the whole affected section or the whole file in a single applyable snippet so it can be applied with one click.
+- Do not split Markdown edits into many individually applyable fenced blocks.
+- Preserve language identifiers on fenced code blocks inside Markdown content.
+- Prefer replacing a complete section, such as from one `##` heading to the next `##` heading, when the section contains fenced code blocks.
+- If many Markdown code fences are involved, provide the full updated file content as one applyable snippet.
+- Optimize Markdown file edits for one-click apply while keeping the final Markdown document readable.
+- Always specify the language for fenced code blocks.
+- Tables must be visually aligned.
+- Pad table cells with spaces so column separators line up.
+- Use separator rows with enough hyphens to match the column width.
+- Avoid compact table separators like `|---|---|`.
+
+Example of the preferred table style:
+
+| File                      | Purpose                                                                   |
+|---------------------------| ------------------------------------------------------------------------- |
+| `docker-compose.yml`      | Local development stack, including GitLab CE and Meridian services        |
+| `docker-compose.prod.yml` | Production-oriented stack, excluding GitLab and local-only infrastructure |
