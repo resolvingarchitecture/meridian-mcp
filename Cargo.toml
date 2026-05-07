@@ -1,14 +1,14 @@
 [package]
-name        = "meridian-mcp"
+name        = "meridian"
 version     = "0.1.0"
 edition     = "2021"
-description = "Meridian — local architecture review MCP server"
+description = "Meridian — local architecture review MCP server and CLI"
 license     = "MIT"
-repository  = "https://github.com/resolvingarchitecture/meridian-mcp"
+repository  = "https://github.com/resolvingarchitecture/meridian"
 keywords    = ["mcp", "architecture", "code-review", "ai"]
 
 [[bin]]
-name = "meridian-mcp"
+name = "meridian"
 path = "src/main.rs"
 
 [dependencies]

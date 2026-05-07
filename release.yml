@@ -14,16 +14,16 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            artifact: meridian-mcp-linux-x86_64
+            artifact: meridian-linux-x86_64
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact: meridian-mcp-macos-x86_64
+            artifact: meridian-macos-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: meridian-mcp-macos-arm64
+            artifact: meridian-macos-arm64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: meridian-mcp-windows-x86_64.exe
+            artifact: meridian-windows-x86_64.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -43,13 +43,13 @@ jobs:
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
         run: |
-          cp target/${{ matrix.target }}/release/meridian-mcp \
+          cp target/${{ matrix.target }}/release/meridian \
              ${{ matrix.artifact }}
 
       - name: Rename binary (Windows)
         if: runner.os == 'Windows'
         run: |
-          copy target\${{ matrix.target }}\release\meridian-mcp.exe `
+          copy target\${{ matrix.target }}\release\meridian.exe `
                ${{ matrix.artifact }}
 
       - name: Upload artifact
@@ -68,8 +68,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            meridian-mcp-linux-x86_64/meridian-mcp-linux-x86_64
-            meridian-mcp-macos-x86_64/meridian-mcp-macos-x86_64
-            meridian-mcp-macos-arm64/meridian-mcp-macos-arm64
-            meridian-mcp-windows-x86_64.exe/meridian-mcp-windows-x86_64.exe
+            meridian-linux-x86_64/meridian-linux-x86_64
+            meridian-macos-x86_64/meridian-macos-x86_64
+            meridian-macos-arm64/meridian-macos-arm64
+            meridian-windows-x86_64.exe/meridian-windows-x86_64.exe
           generate_release_notes: true

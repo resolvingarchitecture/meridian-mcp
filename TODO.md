@@ -7,9 +7,9 @@
 - [x] Keep the binary thin; do not move AI logic, prompt construction, provider orchestration, billing logic, or usage policy into MCP
 - [x] Keep stdout reserved for MCP JSON-RPC and write logs/diagnostics to stderr
 - [x] Reuse scanner, cache, and backend relay path for review flow
-- [ ] Replace remaining ArchGuard naming in code, packaging, configs, cache paths, logs, and user-facing messages with Meridian naming
-- [ ] Rename server/runtime identifiers from ArchGuard-oriented names to Meridian-oriented names
-- [ ] Align MCP server metadata, binary name, command name, and release artifacts with Meridian branding
+- [x] Replace remaining ArchGuard naming in code, packaging, configs, cache paths, logs, and user-facing messages with Meridian naming
+- [x] Rename server/runtime identifiers from ArchGuard-oriented names to Meridian-oriented names
+- [x] Align MCP server metadata, binary name, command name, and release artifacts with Meridian branding
 - [ ] Add CLI command dispatch while reusing the same scanner, cache, and backend client modules
 - [ ] Implement or wire recommended CLI commands:
     - [ ] `meridian mcp`

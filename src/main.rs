@@ -12,7 +12,25 @@ mod scanner;
 #[derive(Clone)]
 struct MeridianServer;
 
-#[rmcp::tool(description = "Scan a project directory and build its architecture model. \
+impl ServerHandler for MeridianServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            server_info: Implementation {
+                name: "meridian".into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+            },
+            instructions: Some(
+                "Meridian local MCP server. Use scan_project to build the cached architecture model, \
+                 review_file to request backend architectural review for a file, and invalidate_cache \
+                 to clear a project's cached model."
+                    .into(),
+            ),
+            ..Default::default()
+        }
+    }
+}
+
+#[rmcp::tool(description = "Scan a Meridian project directory and build its architecture model. \
     Call this once when opening a project. The model is cached automatically.")]
 async fn scan_project(
     // Absolute path to the project root directory
@@ -113,11 +131,11 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .with_env_filter(
             std::env::var("MERIDIAN_LOG")
-                .unwrap_or_else(|_| "meridian_mcp=info".to_string())
+                .unwrap_or_else(|_| "meridian=info".to_string())
         )
         .init();
 
-    info!("meridian-mcp starting (v{})", env!("CARGO_PKG_VERSION"));
+    info!("meridian starting in MCP mode (v{})", env!("CARGO_PKG_VERSION"));
 
     // Validate API key is set before accepting connections
     if std::env::var("MERIDIAN_API_KEY").is_err() {
