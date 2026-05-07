@@ -11,14 +11,14 @@
 - [x] Rename server/runtime identifiers from ArchGuard-oriented names to Meridian-oriented names
 - [x] Align MCP server metadata, binary name, command name, and release artifacts with Meridian branding
 - [x] Add CLI command dispatch while reusing the same scanner, cache, and backend client modules
-- [ ] Implement or wire recommended CLI commands:
-    - [ ] `meridian mcp`
-    - [ ] `meridian scan [root_dir]`
-    - [ ] `meridian review <file_path>`
-    - [ ] `meridian cache clear [root_dir]`
-    - [ ] `meridian config set api-key <key>`
-    - [ ] `meridian doctor`
-    - [ ] `meridian version`
+- [x] Implement or wire recommended CLI commands:
+    - [x `meridian mcp`
+    - [x] `meridian scan [root_dir]`
+    - [x] `meridian review <file_path>`
+    - [x] `meridian cache clear [root_dir]`
+    - [x] `meridian config set api-key <key>`
+    - [x] `meridian doctor`
+    - [x] `meridian version`
 - [ ] Improve error messages when backend auth fails, balance/usage policy blocks review, or the backend is unreachable
 - [ ] Add end-to-end smoke tests for `scan_project`, `review_file`, and `invalidate_cache`
 - [ ] Validate scan performance on large repositories
