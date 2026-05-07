@@ -5,7 +5,7 @@ use rmcp::{
     schemars, tool, ServerHandler,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
@@ -25,7 +25,21 @@ struct ScanProjectRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct ReviewFileRequest {
+struct FullReviewPromptRequest {
+    root_dir: String,
+    file_path: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct FullReviewRequest {
+    root_dir: String,
+    file_path: String,
+    content: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct IntermediateReviewRequest {
     root_dir: String,
     file_path: String,
     content: String,
@@ -77,43 +91,94 @@ impl MeridianServer {
         }
     }
 
-    #[tool(description = "Review a single file for architectural violations. \
-        Requires scan_project to have been called first. Returns structured findings \
-        with severity, explanation, consequence, and suggested fix.")]
-    async fn review_file(
+    #[tool(description = "Stage 1 of the review workflow. Build the full-review prompt. \
+            This must be called before run_full_review.")]
+    async fn build_full_review_prompt(
         &self,
-        Parameters(req): Parameters<ReviewFileRequest>,
+        Parameters(req): Parameters<FullReviewPromptRequest>,
     ) -> String {
         let root_dir = req.root_dir;
         let file_path = req.file_path;
         let content = req.content;
 
-        info!("review_file: {}", file_path);
+        info!("build_full_review_prompt: {}", file_path);
 
-        // Load cached arch model — scan first if not yet scanned
-        let model = match cache::get(&root_dir) {
-            Ok(Some(m)) => m,
-            _ => {
-                let path = std::path::Path::new(&root_dir);
-                match scanner::scan(path) {
-                    Ok(m) => {
-                        let _ = cache::set(&root_dir, &m);
-                        m
-                    }
-                    Err(e) => {
-                        return json!({ "error": format!("could not build arch model: {e}") }).to_string();
-                    }
-                }
+        let model = match load_or_scan_model(&root_dir) {
+            Ok(model) => model,
+            Err(e) => {
+                return json!({ "error": e.to_string() }).to_string();
             }
         };
 
-        match agent::review(&model, &file_path, &content).await {
+        match agent::build_full_review_prompt(&model, &file_path, &content).await {
+            Ok(prompt) => {
+                info!("build_full_review_prompt: complete for {}", file_path);
+                json!({ "prompt": prompt }).to_string()
+            }
+            Err(e) => {
+                tracing::error!("build_full_review_prompt failed: {}", e);
+                json!({ "error": e.to_string() }).to_string()
+            }
+        }
+    }
+
+    #[tool(description = "Stage 2 of the review workflow. Run the full review. \
+        This must be called after build_full_review_prompt and before run_intermediate_review.")]
+    async fn run_full_review(
+        &self,
+        Parameters(req): Parameters<FullReviewRequest>,
+    ) -> String {
+        let root_dir = req.root_dir;
+        let file_path = req.file_path;
+        let content = req.content;
+
+        info!("run_full_review: {}", file_path);
+
+        let model = match load_or_scan_model(&root_dir) {
+            Ok(model) => model,
+            Err(e) => {
+                return json!({ "error": e.to_string() }).to_string();
+            }
+        };
+
+        match agent::run_full_review(&model, &file_path, &content).await {
             Ok(findings) => {
-                info!("review_file: {} finding(s) for {}", findings.len(), file_path);
+                info!("run_full_review: {} finding(s) for {}", findings.len(), file_path);
                 json!({ "findings": findings }).to_string()
             }
             Err(e) => {
-                tracing::error!("review_file failed: {}", e);
+                tracing::error!("run_full_review failed: {}", e);
+                json!({ "error": e.to_string() }).to_string()
+            }
+        }
+    }
+
+    #[tool(description = "Stage 3 of the review workflow. Run an intermediate review for a file change. \
+        This must be called only after run_full_review has completed.")]
+    async fn run_intermediate_review(
+        &self,
+        Parameters(req): Parameters<IntermediateReviewRequest>,
+    ) -> String {
+        let root_dir = req.root_dir;
+        let file_path = req.file_path;
+        let content = req.content;
+
+        info!("run_intermediate_review: {}", file_path);
+
+        let model = match load_or_scan_model(&root_dir) {
+            Ok(model) => model,
+            Err(e) => {
+                return json!({ "error": e.to_string() }).to_string();
+            }
+        };
+
+        match agent::run_intermediate_review(&model, &file_path, &content).await {
+            Ok(findings) => {
+                info!("run_intermediate_review: {} finding(s) for {}", findings.len(), file_path);
+                json!({ "findings": findings }).to_string()
+            }
+            Err(e) => {
+                tracing::error!("run_intermediate_review failed: {}", e);
                 json!({ "error": e.to_string() }).to_string()
             }
         }
@@ -134,6 +199,21 @@ impl MeridianServer {
     }
 }
 
+fn load_or_scan_model(root_dir: &str) -> Result<scanner::ArchModel> {
+    if let Some(model) = cache::get(root_dir)? {
+        return Ok(model);
+    }
+
+    let path = std::path::Path::new(root_dir);
+    let model = scanner::scan(path)
+        .with_context(|| format!("could not build arch model for: {root_dir}"))?;
+
+    cache::set(root_dir, &model)
+        .with_context(|| format!("failed to cache architecture model for: {root_dir}"))?;
+
+    Ok(model)
+}
+
 impl ServerHandler for MeridianServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -152,12 +232,31 @@ async fn run_cli(args: Vec<String>) -> Result<()> {
             let root = args.get(2).map(String::as_str).unwrap_or(".");
             cli_scan(root)
         }
-        Some("review") => {
-            let file_path = args
-                .get(2)
-                .context("usage: meridian review <file_path>")?;
-            cli_review(file_path).await
-        }
+        Some("review") => match args.get(2).map(String::as_str) {
+            Some("prompt") => {
+                let file_path = args
+                    .get(3)
+                    .context("usage: meridian review prompt <file_path>")?;
+                cli_review_prompt(file_path).await
+            }
+            Some("full") => {
+                let file_path = args
+                    .get(3)
+                    .context("usage: meridian review full <file_path>")?;
+                cli_review_full(file_path).await
+            }
+            Some("intermediate") => {
+                let file_path = args
+                    .get(3)
+                    .context("usage: meridian review intermediate <file_path>")?;
+                cli_review_intermediate(file_path).await
+            }
+            _ => {
+                anyhow::bail!(
+                    "usage: meridian review <prompt|full|intermediate> <file_path>"
+                );
+            }
+        },
         Some("cache") => match args.get(2).map(String::as_str) {
             Some("clear") => {
                 let root = args.get(3).map(String::as_str).unwrap_or(".");
@@ -226,7 +325,43 @@ fn cli_scan(root: &str) -> Result<()> {
     Ok(())
 }
 
-async fn cli_review(file_path: &str) -> Result<()> {
+async fn cli_review_prompt(file_path: &str) -> Result<()> {
+    let (model, content) = prepare_cli_review(file_path)?;
+
+    let prompt = agent::build_full_review_prompt(&model, file_path, &content).await?;
+
+    println!("{}", serde_json::to_string_pretty(&json!({
+        "prompt": prompt
+    }))?);
+
+    Ok(())
+}
+
+async fn cli_review_full(file_path: &str) -> Result<()> {
+    let (model, content) = prepare_cli_review(file_path)?;
+
+    let findings = agent::run_full_review(&model, file_path, &content).await?;
+
+    println!("{}", serde_json::to_string_pretty(&json!({
+        "findings": findings
+    }))?);
+
+    Ok(())
+}
+
+async fn cli_review_intermediate(file_path: &str) -> Result<()> {
+    let (model, content) = prepare_cli_review(file_path)?;
+
+    let findings = agent::run_intermediate_review(&model, file_path, &content).await?;
+
+    println!("{}", serde_json::to_string_pretty(&json!({
+        "findings": findings
+    }))?);
+
+    Ok(())
+}
+
+fn prepare_cli_review(file_path: &str) -> Result<(scanner::ArchModel, String)> {
     let file = PathBuf::from(file_path);
 
     if !file.exists() {
@@ -255,13 +390,7 @@ async fn cli_review(file_path: &str) -> Result<()> {
         }
     };
 
-    let findings = agent::review(&model, file_path, &content).await?;
-
-    println!("{}", serde_json::to_string_pretty(&json!({
-        "findings": findings
-    }))?);
-
-    Ok(())
+    Ok((model, content))
 }
 
 fn cli_cache_clear(root: &str) -> Result<()> {
@@ -329,12 +458,19 @@ fn print_help() {
 Usage:
   meridian mcp
   meridian scan [root_dir]
-  meridian review <file_path>
+  meridian review prompt <file_path>
+  meridian review full <file_path>
+  meridian review intermediate <file_path>
   meridian cache clear [root_dir]
   meridian config set api-key <key>
   meridian doctor
   meridian version
   meridian help
+
+Review workflow:
+  1. meridian review prompt <file_path>
+  2. meridian review full <file_path>
+  3. meridian review intermediate <file_path>
 
 Environment:
   MERIDIAN_API_KEY      API key, usually m_live_...

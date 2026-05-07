@@ -20,7 +20,6 @@
     - [x] `meridian doctor`
     - [x] `meridian version`
 - [x] Add support for session authentication upon successful backend auth with API key
-- [ ] Ensure this mcp client tracks sats balance and makes user aware of inability to review due to insufficient balance
 - [ ] Improve error messages when backend auth fails, balance/usage policy blocks review, or the backend is unreachable
 - [ ] Add end-to-end smoke tests for `scan_project`, `review_file`, and `invalidate_cache`
 - [ ] Validate scan performance on large repositories
@@ -52,7 +51,7 @@
 - [x] Allow explicit cache invalidation
 - [x] Derive cache key from project root and directory structure fingerprint
 - [x] Avoid storing raw source content in the cache
-- [ ] Rename local cache directory from old product naming to Meridian naming
+- [x] Rename local cache directory from old product naming to Meridian naming
 - [ ] Confirm cache location and cache key strategy are stable across supported platforms
 - [ ] Track scan freshness metadata more explicitly
 - [ ] Add cache health diagnostics for `meridian doctor`
@@ -62,17 +61,16 @@
 - [x] Use bearer authentication for backend requests
 - [x] Send file review payloads to the backend instead of performing local AI review
 - [x] Preserve backend error body for non-success responses
-- [ ] Replace old environment variable names with:
+- [x] Replace old environment variable names with:
     - [ ] `MERIDIAN_API_KEY`
     - [ ] `MERIDIAN_BACKEND_URL`
     - [ ] `MERIDIAN_LOG`
-- [ ] Optionally support old ArchGuard environment variable names temporarily as migration aliases, with warnings
 - [ ] Confirm API key validation and messages align with `m_live_...` Meridian API keys
-- [ ] Replace generic `/api/review` usage with the backend's current review endpoint
-- [ ] Confirm review endpoint selection among:
-    - [ ] `POST /api/skills/review/full`
-    - [ ] `POST /api/skills/review/intermediate`
-    - [ ] `POST /api/skills/review/full/prompt`
+- [x] Replace generic `/api/review` usage with the backend's current review endpoint
+- [x] Confirm review endpoint selection among:
+    - [x] `POST /api/skills/review/full`
+    - [x] `POST /api/skills/review/intermediate`
+    - [x] `POST /api/skills/review/full/prompt`
 - [ ] Confirm the review request payload matches the selected backend endpoint exactly
 - [ ] Confirm the review response shape maps cleanly to MCP findings
 - [ ] Surface authentication failures clearly

@@ -10,6 +10,9 @@ static CLIENT: OnceLock<Client> = OnceLock::new();
 static SESSION: OnceLock<Arc<Mutex<Option<Session>>>> = OnceLock::new();
 
 const LOGIN_PATH: &str = "/security/login";
+const FULL_REVIEW_PROMPT_PATH: &str = "/api/skills/review/full/prompt";
+const FULL_REVIEW_PATH: &str = "/api/skills/review/full";
+const INTERMEDIATE_REVIEW_PATH: &str = "/api/skills/review/intermediate";
 const SESSION_EXPIRY_SAFETY_MARGIN_MILLIS: u64 = 30_000;
 
 fn http() -> &'static Client {
@@ -68,6 +71,11 @@ struct ReviewRequest<'a> {
     arch_model: &'a ArchModel,
     file_path:  &'a str,
     content:    &'a str,
+}
+
+#[derive(Deserialize)]
+struct PromptResponse {
+    prompt: String,
 }
 
 #[derive(Deserialize)]
@@ -134,7 +142,7 @@ async fn invalidate_session() {
     *session = None;
 }
 
-async fn send_review_request(
+async fn send_backend_request(
     url: &str,
     session_id: &str,
     body: &ReviewRequest<'_>,
@@ -148,34 +156,35 @@ async fn send_review_request(
         .context("failed to reach backend")
 }
 
-/// Send a review request to the Java backend and return findings.
-pub async fn review(
-    model:     &ArchModel,
-    file_path: &str,
-    content:   &str,
-) -> Result<Vec<Finding>> {
+async fn post_review_stage(
+    path: &str,
+    body: &ReviewRequest<'_>,
+) -> Result<reqwest::Response> {
     let api_key = crate::config::api_key()?;
-    let backend_url  = std::env::var("MERIDIAN_BACKEND_URL")
+    let backend_url = std::env::var("MERIDIAN_BACKEND_URL")
         .unwrap_or_else(|_| "https://resolvingarchitecture.io/meridian/api".to_string());
 
-    let url  = format!("{backend_url}/api/review");
-    let body = ReviewRequest { arch_model: model, file_path, content };
+    let url = format!("{backend_url}{path}");
 
     let mut current_session_id = session_id(&api_key, &backend_url).await?;
-    let mut response = send_review_request(&url, &current_session_id, &body).await?;
+    let mut response = send_backend_request(&url, &current_session_id, body).await?;
 
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         invalidate_session().await;
         current_session_id = login(&api_key, &backend_url).await?;
-        response = send_review_request(&url, &current_session_id, &body).await?;
+        response = send_backend_request(&url, &current_session_id, body).await?;
     }
 
+    Ok(response)
+}
+
+async fn parse_review_response(response: reqwest::Response) -> Result<Vec<Finding>> {
     match response.status() {
         s if s.is_success() => {
             let data: ReviewResponse = response
                 .json()
                 .await
-                .context("failed to parse backend response")?;
+                .context("failed to parse backend review response")?;
             Ok(data.findings)
         }
         reqwest::StatusCode::UNAUTHORIZED => {
@@ -187,7 +196,69 @@ pub async fn review(
         }
         status => {
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("backend error {status}: {body}")
+            anyhow::bail!("backend review error {status}: {body}")
         }
     }
+}
+
+async fn parse_prompt_response(response: reqwest::Response) -> Result<String> {
+    match response.status() {
+        s if s.is_success() => {
+            let data: PromptResponse = response
+                .json()
+                .await
+                .context("failed to parse backend prompt response")?;
+            Ok(data.prompt)
+        }
+        reqwest::StatusCode::UNAUTHORIZED => {
+            invalidate_session().await;
+            anyhow::bail!("backend session expired or was rejected after re-login")
+        }
+        reqwest::StatusCode::TOO_MANY_REQUESTS => {
+            anyhow::bail!("monthly review limit reached — visit https://resolvingarchitecture.io/meridian")
+        }
+        status => {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("backend prompt error {status}: {body}")
+        }
+    }
+}
+
+/// Stage 1: build the full-review prompt.
+///
+/// This must be called before requesting a full review.
+pub async fn build_full_review_prompt(
+    model:     &ArchModel,
+    file_path: &str,
+    content:   &str,
+) -> Result<String> {
+    let body = ReviewRequest { arch_model: model, file_path, content };
+    let response = post_review_stage(FULL_REVIEW_PROMPT_PATH, &body).await?;
+    parse_prompt_response(response).await
+}
+
+/// Stage 2: execute a full review.
+///
+/// This must be called after the full-review prompt stage.
+pub async fn run_full_review(
+    model:     &ArchModel,
+    file_path: &str,
+    content:   &str,
+) -> Result<Vec<Finding>> {
+    let body = ReviewRequest { arch_model: model, file_path, content };
+    let response = post_review_stage(FULL_REVIEW_PATH, &body).await?;
+    parse_review_response(response).await
+}
+
+/// Stage 3: execute an intermediate review for a file change.
+///
+/// This must be called only after the full review stage has completed.
+pub async fn run_intermediate_review(
+    model:     &ArchModel,
+    file_path: &str,
+    content:   &str,
+) -> Result<Vec<Finding>> {
+    let body = ReviewRequest { arch_model: model, file_path, content };
+    let response = post_review_stage(INTERMEDIATE_REVIEW_PATH, &body).await?;
+    parse_review_response(response).await
 }
