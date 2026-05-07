@@ -75,7 +75,7 @@ pub async fn review(
             Ok(data.findings)
         }
         reqwest::StatusCode::UNAUTHORIZED => {
-            anyhow::bail!("invalid API key — check ARCHGUARD_API_KEY")
+            anyhow::bail!("invalid API key — check MERIDIAN_API_KEY")
         }
         reqwest::StatusCode::TOO_MANY_REQUESTS => {
             anyhow::bail!("monthly review limit reached — visit https://resolvingarchitecture.io/meridian")

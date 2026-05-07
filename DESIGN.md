@@ -479,9 +479,8 @@ The current Meridian naming is:
 - `MERIDIAN_BACKEND_URL`
 - `MERIDIAN_LOG`
 
-The CLI may also support a local config file for values such as API key and backend URL.
-
-The codebase still contains some older ArchGuard naming in places, so migration should be treated as ongoing until all build, release, command, artifact, and configuration surfaces are updated consistently.
+The CLI may also support a local config file for values such as API key and 
+backend URL.
 
 ---
 
