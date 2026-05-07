@@ -50,10 +50,10 @@ pub async fn review(
     file_path: &str,
     content:   &str,
 ) -> Result<Vec<Finding>> {
-    let api_key      = std::env::var("ARCHGUARD_API_KEY")
-        .context("ARCHGUARD_API_KEY not set")?;
-    let backend_url  = std::env::var("ARCHGUARD_BACKEND_URL")
-        .unwrap_or_else(|_| "https://archguard-backend.fly.dev".to_string());
+    let api_key      = std::env::var("MERIDIAN_API_KEY")
+        .context("MERIDIAN_API_KEY not set")?;
+    let backend_url  = std::env::var("MERIDIAN_BACKEND_URL")
+        .unwrap_or_else(|_| "https://resolvingarchitecture.io/meridian/api".to_string());
 
     let url  = format!("{backend_url}/api/review");
     let body = ReviewRequest { arch_model: model, file_path, content };
@@ -78,7 +78,7 @@ pub async fn review(
             anyhow::bail!("invalid API key — check ARCHGUARD_API_KEY")
         }
         reqwest::StatusCode::TOO_MANY_REQUESTS => {
-            anyhow::bail!("monthly review limit reached — upgrade at archguard.dev/pricing")
+            anyhow::bail!("monthly review limit reached — visit https://resolvingarchitecture.io/meridian")
         }
         status => {
             let body = response.text().await.unwrap_or_default();

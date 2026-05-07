@@ -10,7 +10,7 @@ mod scanner;
 // ── MCP Server ────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
-struct ArchGuardServer;
+struct MeridianServer;
 
 #[rmcp::tool(description = "Scan a project directory and build its architecture model. \
     Call this once when opening a project. The model is cached automatically.")]
@@ -112,21 +112,21 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
-            std::env::var("ARCHGUARD_LOG")
-                .unwrap_or_else(|_| "archguard_mcp=info".to_string())
+            std::env::var("MERIDIAN_LOG")
+                .unwrap_or_else(|_| "meridian_mcp=info".to_string())
         )
         .init();
 
-    info!("archguard-mcp starting (v{})", env!("CARGO_PKG_VERSION"));
+    info!("meridian-mcp starting (v{})", env!("CARGO_PKG_VERSION"));
 
     // Validate API key is set before accepting connections
-    if std::env::var("ARCHGUARD_API_KEY").is_err() {
-        eprintln!("ERROR: ARCHGUARD_API_KEY environment variable not set.");
-        eprintln!("Get your API key at https://resolvingarchitecture.io/archguard/dashboard");
+    if std::env::var("MERIDIAN_API_KEY").is_err() {
+        eprintln!("ERROR: MERIDIAN_API_KEY environment variable not set.");
+        eprintln!("Get your API key at https://resolvingarchitecture.io/meridian");
         std::process::exit(1);
     }
 
-    let server = ArchGuardServer;
+    let server = MeridianServer;
 
     // Stdio transport — Cursor/Claude Code spawn this process
     rmcp::serve_stdio(server).await?;

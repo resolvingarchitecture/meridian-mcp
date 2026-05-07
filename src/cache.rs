@@ -11,8 +11,8 @@ fn db() -> Result<&'static Db> {
     let db = DB.get_or_init(|| {
         let cache_dir = dirs::cache_dir()
             .unwrap_or_else(|| std::path::PathBuf::from(".cache"))
-            .join("archguard");
-        sled::open(&cache_dir).expect("failed to open cache at ~/.cache/archguard")
+            .join("meridian");
+        sled::open(&cache_dir).expect("failed to open cache at ~/.cache/meridian")
     });
     Ok(db)
 }

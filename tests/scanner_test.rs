@@ -1,4 +1,4 @@
-use archguard_mcp::scanner;
+use meridian_mcp::scanner;
 use assert_fs::prelude::*;
 use assert_fs::TempDir;
 

@@ -23,7 +23,7 @@ Add to your MCP client config:
 ```json
 {
   "mcpServers": {
-    "archguard": {
+    "meridian": {
       "command": "meridian-mcp",
       "env": {
         "MERIDIAN_API_KEY": "m_live_..."
@@ -36,7 +36,7 @@ Add to your MCP client config:
 **Claude Code** (`~/.claude/mcp_servers.json`):
 ```json
 {
-  "archguard": {
+  "meridian": {
     "command": "meridian-mcp",
     "env": {
       "MERIDIAN_API_KEY": "m_live_..."
@@ -89,11 +89,11 @@ Clears the cached architecture model. Use after major refactors.
 
 ## Environment variables
 
-| Variable | Required | Default                                          | Description                                             |
-|---|---|--------------------------------------------------|---------------------------------------------------------|
-| `MERIDIAN_API_KEY` | Yes | —                                                | Your API key from resolvingarchitecture.io/meridian |
-| `MERIDIAN_BACKEND_URL` | No | `https://resolvingarchitecture.io/meridian/api` | Backend URL                                             |
-| `MERIDIAN_LOG` | No | `meridian_mcp=info`                             | Log level (to stderr)                                   |
+| Variable               | Required | Default                                           | Description                                              |
+|------------------------|----------|---------------------------------------------------|----------------------------------------------------------|
+| `MERIDIAN_API_KEY`     | Yes      | —                                                 | Your API key from resolvingarchitecture.io/meridian      |
+| `MERIDIAN_BACKEND_URL` | No       | `https://resolvingarchitecture.io/meridian/api`   | Backend URL                                              |
+| `MERIDIAN_LOG`         | No       | `meridian_mcp=info`                               | Log level (to stderr)                                    |
 
 ## Development
 
