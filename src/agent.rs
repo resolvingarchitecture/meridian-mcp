@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 static CLIENT: OnceLock<Client> = OnceLock::new();
 static SESSION: OnceLock<Arc<Mutex<Option<Session>>>> = OnceLock::new();
@@ -50,6 +51,203 @@ impl Session {
 }
 
 // ── Finding — matches Java backend JSON schema exactly ───────────────────────
+#[derive(Serialize)]
+struct MultipleReviewRequest {
+    #[serde(rename = "request_id")]
+    request_id: Uuid,
+    #[serde(rename = "context_id")]
+    context_id: Uuid,
+    documents: Vec<DocumentInput>,
+    options: ReviewOptions,
+}
+
+#[derive(Serialize)]
+struct DocumentInput {
+    id: String,
+    title: String,
+    filename: String,
+    #[serde(rename = "type_hint")]
+    type_hint: DocumentTypeHint,
+    author: Option<String>,
+    date: Option<String>,
+    version: Option<String>,
+    #[serde(rename = "stated_scope")]
+    stated_scope: Option<String>,
+    #[serde(rename = "organization_context")]
+    organization_context: Option<serde_json::Value>,
+    #[serde(rename = "known_stakeholders")]
+    known_stakeholders: Vec<serde_json::Value>,
+    #[serde(rename = "known_decisions")]
+    known_decisions: Vec<serde_json::Value>,
+    content: Vec<DocumentContent>,
+}
+
+#[derive(Serialize)]
+struct DocumentContent {
+    #[serde(rename = "content_type")]
+    content_type: ContentType,
+    #[serde(rename = "media_type")]
+    media_type: String,
+    encoding: ContentEncoding,
+    data: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum DocumentTypeHint {
+    ApplicationDesign,
+    ArchitectureDecisionRecord,
+    IntegrationDesign,
+    DataModel,
+    InfrastructureDesign,
+    SecurityDesign,
+    ThreatModel,
+    EnterpriseRoadmap,
+    StandardsDocument,
+    Runbook,
+    Codebase,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum ContentType {
+    Text,
+    Base64Pdf,
+    Base64Img,
+    Url,
+    Code,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum ContentEncoding {
+    Plain,
+    Base64,
+    Utf8,
+}
+
+#[derive(Serialize)]
+struct ReviewOptions {
+    #[serde(rename = "infer_stakeholders")]
+    infer_stakeholders: bool,
+    #[serde(rename = "infer_architectural_decisions")]
+    infer_architectural_decisions: bool,
+    #[serde(rename = "include_quality_attribute_ranking")]
+    include_quality_attribute_ranking: bool,
+    #[serde(rename = "domains_to_review")]
+    domains_to_review: Vec<Domain>,
+    #[serde(rename = "minimum_confidence_threshold")]
+    minimum_confidence_threshold: f64,
+    #[serde(rename = "minimum_gap_severity")]
+    minimum_gap_severity: GapSeverity,
+}
+
+impl ReviewOptions {
+    fn default_options() -> Self {
+        Self {
+            infer_stakeholders: true,
+            infer_architectural_decisions: true,
+            include_quality_attribute_ranking: true,
+            domains_to_review: vec![
+                Domain::Application,
+                Domain::Integration,
+                Domain::Data,
+                Domain::Infrastructure,
+                Domain::Security,
+                Domain::Enterprise,
+            ],
+            minimum_confidence_threshold: 0.0,
+            minimum_gap_severity: GapSeverity::Low,
+        }
+    }
+
+    fn intermediate_options() -> Self {
+        Self {
+            infer_stakeholders: false,
+            infer_architectural_decisions: false,
+            include_quality_attribute_ranking: false,
+            domains_to_review: vec![
+                Domain::Application,
+                Domain::Integration,
+                Domain::Data,
+                Domain::Infrastructure,
+                Domain::Security,
+                Domain::Enterprise,
+            ],
+            minimum_confidence_threshold: 0.4,
+            minimum_gap_severity: GapSeverity::High,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum GapSeverity {
+    Low,
+    Medium,
+    High,
+}
+
+fn build_multiple_review_request(
+    model: &ArchModel,
+    file_path: &str,
+    content: &str,
+    options: ReviewOptions,
+) -> MultipleReviewRequest {
+    let arch_model_json = serde_json::to_string_pretty(model)
+        .unwrap_or_else(|_| "{}".to_string());
+
+    MultipleReviewRequest {
+        request_id: Uuid::new_v4(),
+        context_id: Uuid::new_v4(),
+        documents: vec![
+            DocumentInput {
+                id: "architecture-model".to_string(),
+                title: "Architecture model".to_string(),
+                filename: "architecture-model.json".to_string(),
+                type_hint: DocumentTypeHint::ApplicationDesign,
+                author: None,
+                date: None,
+                version: None,
+                stated_scope: Some("Locally scanned Meridian architecture model".to_string()),
+                organization_context: None,
+                known_stakeholders: Vec::new(),
+                known_decisions: Vec::new(),
+                content: vec![
+                    DocumentContent {
+                        content_type: ContentType::Text,
+                        media_type: "application/json".to_string(),
+                        encoding: ContentEncoding::Utf8,
+                        data: arch_model_json,
+                    },
+                ],
+            },
+            DocumentInput {
+                id: file_path.to_string(),
+                title: file_path.to_string(),
+                filename: file_path.to_string(),
+                type_hint: DocumentTypeHint::Codebase,
+                author: None,
+                date: None,
+                version: None,
+                stated_scope: Some("Source file submitted for architecture review".to_string()),
+                organization_context: None,
+                known_stakeholders: Vec::new(),
+                known_decisions: Vec::new(),
+                content: vec![
+                    DocumentContent {
+                        content_type: ContentType::Code,
+                        media_type: "text/plain".to_string(),
+                        encoding: ContentEncoding::Utf8,
+                        data: content.to_string(),
+                    },
+                ],
+            },
+        ],
+        options,
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
@@ -209,7 +407,7 @@ async fn invalidate_session() {
 async fn send_backend_request(
     url: &str,
     session_id: &str,
-    body: &ReviewRequest<'_>,
+    body: &MultipleReviewRequest,
 ) -> Result<reqwest::Response> {
     http()
         .post(url)
@@ -222,7 +420,7 @@ async fn send_backend_request(
 
 async fn post_review_stage(
     path: &str,
-    body: &ReviewRequest<'_>,
+    body: &MultipleReviewRequest,
 ) -> Result<reqwest::Response> {
     let api_key = crate::config::api_key()?;
     let backend_url = std::env::var("MERIDIAN_BACKEND_URL")
@@ -295,7 +493,12 @@ pub async fn build_full_review_prompt(
     file_path: &str,
     content:   &str,
 ) -> Result<DomainSelectionPrompt> {
-    let body = ReviewRequest { arch_model: model, file_path, content };
+    let body = build_multiple_review_request(
+        model,
+        file_path,
+        content,
+        ReviewOptions::default_options(),
+    );
     let response = post_review_stage(FULL_REVIEW_PROMPT_PATH, &body).await?;
     parse_prompt_response(response).await
 }
@@ -308,7 +511,12 @@ pub async fn run_full_review(
     file_path: &str,
     content:   &str,
 ) -> Result<Vec<Finding>> {
-    let body = ReviewRequest { arch_model: model, file_path, content };
+    let body = build_multiple_review_request(
+        model,
+        file_path,
+        content,
+        ReviewOptions::default_options(),
+    );
     let response = post_review_stage(FULL_REVIEW_PATH, &body).await?;
     parse_review_response(response).await
 }
@@ -321,7 +529,12 @@ pub async fn run_intermediate_review(
     file_path: &str,
     content:   &str,
 ) -> Result<Vec<Finding>> {
-    let body = ReviewRequest { arch_model: model, file_path, content };
+    let body = build_multiple_review_request(
+        model,
+        file_path,
+        content,
+        ReviewOptions::intermediate_options(),
+    );
     let response = post_review_stage(INTERMEDIATE_REVIEW_PATH, &body).await?;
     parse_review_response(response).await
 }
