@@ -11,6 +11,7 @@ static CLIENT: OnceLock<Client> = OnceLock::new();
 static SESSION: OnceLock<Arc<Mutex<Option<Session>>>> = OnceLock::new();
 
 const LOGIN_PATH: &str = "/security/login";
+const CONTEXT_PATH: &str = "/api/context";
 const FULL_REVIEW_PROMPT_PATH: &str = "/api/skills/review/full/prompt";
 const FULL_REVIEW_PATH: &str = "/api/skills/review/full";
 const INTERMEDIATE_REVIEW_PATH: &str = "/api/skills/review/intermediate";
@@ -51,6 +52,41 @@ impl Session {
 }
 
 // ── Finding — matches Java backend JSON schema exactly ───────────────────────
+#[derive(Serialize)]
+struct ContentEnrichmentRequest {
+    #[serde(rename = "request_id")]
+    request_id: Uuid,
+    context: ArchitectureContext,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchitectureContext {
+    #[serde(rename = "context_id")]
+    pub context_id: Option<Uuid>,
+    #[serde(rename = "organization_context")]
+    pub organization_context: Option<serde_json::Value>,
+    #[serde(rename = "business_goals")]
+    pub business_goals: Option<Vec<String>>,
+    pub stakeholders: Option<Vec<serde_json::Value>>,
+    pub decisions: Option<Vec<serde_json::Value>>,
+    pub constraints: Option<Vec<String>>,
+    pub risks: Option<Vec<String>>,
+    pub standards: Option<Vec<String>>,
+    #[serde(rename = "scope_notes")]
+    pub scope_notes: Option<Vec<String>>,
+    #[serde(rename = "freeform_notes")]
+    pub freeform_notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ContextResponse {
+    #[serde(rename = "contextId")]
+    pub context_id: Uuid,
+    #[serde(rename = "contextPercentUsed")]
+    pub context_percent_used: serde_json::Value,
+    pub message: String,
+}
+
 #[derive(Serialize)]
 struct MultipleReviewRequest {
     #[serde(rename = "request_id")]
@@ -418,6 +454,39 @@ async fn send_backend_request(
         .context("failed to reach backend")
 }
 
+async fn send_context_request(
+    url: &str,
+    session_id: &str,
+    body: &ContentEnrichmentRequest,
+) -> Result<reqwest::Response> {
+    http()
+        .post(url)
+        .bearer_auth(session_id)
+        .json(body)
+        .send()
+        .await
+        .context("failed to reach backend context endpoint")
+}
+
+async fn post_context(body: &ContentEnrichmentRequest) -> Result<reqwest::Response> {
+    let api_key = crate::config::api_key()?;
+    let backend_url = std::env::var("MERIDIAN_BACKEND_URL")
+        .unwrap_or_else(|_| "https://resolvingarchitecture.io/meridian/api".to_string());
+
+    let url = format!("{backend_url}{CONTEXT_PATH}");
+
+    let mut current_session_id = session_id(&api_key, &backend_url).await?;
+    let mut response = send_context_request(&url, &current_session_id, body).await?;
+
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        invalidate_session().await;
+        current_session_id = login(&api_key, &backend_url).await?;
+        response = send_context_request(&url, &current_session_id, body).await?;
+    }
+
+    Ok(response)
+}
+
 async fn post_review_stage(
     path: &str,
     body: &MultipleReviewRequest,
@@ -483,6 +552,46 @@ async fn parse_prompt_response(response: reqwest::Response) -> Result<DomainSele
             anyhow::bail!("backend prompt error {status}: {body}")
         }
     }
+}
+
+async fn parse_context_response(response: reqwest::Response) -> Result<ContextResponse> {
+    match response.status() {
+        s if s.is_success() => {
+            response
+                .json()
+                .await
+                .context("failed to parse backend context response")
+        }
+        reqwest::StatusCode::UNAUTHORIZED => {
+            invalidate_session().await;
+            anyhow::bail!("backend session expired or was rejected after re-login")
+        }
+        reqwest::StatusCode::PAYMENT_REQUIRED => {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("insufficient sats to add context: {body}")
+        }
+        reqwest::StatusCode::PAYLOAD_TOO_LARGE => {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("context exceeds maximum size: {body}")
+        }
+        status => {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("backend context error {status}: {body}")
+        }
+    }
+}
+
+/// Add persistent architecture context to the backend.
+///
+/// The returned context_id can be included in subsequent review requests.
+pub async fn add_context(context: ArchitectureContext) -> Result<ContextResponse> {
+    let body = ContentEnrichmentRequest {
+        request_id: Uuid::new_v4(),
+        context,
+    };
+
+    let response = post_context(&body).await?;
+    parse_context_response(response).await
 }
 
 /// Stage 1: build the full-review prompt.

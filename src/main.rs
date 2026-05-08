@@ -20,6 +20,21 @@ mod scanner;
 struct MeridianServer;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct AddContextRequest {
+    #[schemars(with = "Option<String>")]
+    context_id: Option<uuid::Uuid>,
+    organization_context: Option<serde_json::Value>,
+    business_goals: Option<Vec<String>>,
+    stakeholders: Option<Vec<serde_json::Value>>,
+    decisions: Option<Vec<serde_json::Value>>,
+    constraints: Option<Vec<String>>,
+    risks: Option<Vec<String>>,
+    standards: Option<Vec<String>>,
+    scope_notes: Option<Vec<String>>,
+    freeform_notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ScanProjectRequest {
     root_dir: String,
 }
@@ -52,167 +67,204 @@ struct InvalidateCacheRequest {
 
 #[tool(tool_box)]
 impl MeridianServer {
+    #[tool(description = "Add persistent architecture context to the Meridian backend. \
+            Returns a context_id that can be included in subsequent reviews.")]
+        async fn add_context(
+            &self,
+            Parameters(req): Parameters<AddContextRequest>,
+        ) -> String {
+            info!("add_context");
+
+            let context = agent::ArchitectureContext {
+                context_id: req.context_id,
+                organization_context: req.organization_context,
+                business_goals: req.business_goals,
+                stakeholders: req.stakeholders,
+                decisions: req.decisions,
+                constraints: req.constraints,
+                risks: req.risks,
+                standards: req.standards,
+                scope_notes: req.scope_notes,
+                freeform_notes: req.freeform_notes,
+            };
+
+            match agent::add_context(context).await {
+                Ok(response) => {
+                    info!("add_context: complete — context_id={}", response.context_id);
+                    json!({
+                        "context_id": response.context_id,
+                        "context_percent_used": response.context_percent_used,
+                        "message": response.message
+                    }).to_string()
+                }
+                Err(e) => {
+                    tracing::error!("add_context failed: {}", e);
+                    json!({ "error": e.to_string() }).to_string()
+                }
+            }
+        }
+
     #[tool(description = "Scan a Meridian project directory and build its architecture model. \
         Call this once when opening a project. The model is cached automatically.")]
-    async fn scan_project(
-        &self,
-        Parameters(req): Parameters<ScanProjectRequest>,
-    ) -> String {
-        let root_dir = req.root_dir;
-        info!("scan_project: {}", root_dir);
-        let path = std::path::Path::new(&root_dir);
+        async fn scan_project(
+            &self,
+            Parameters(req): Parameters<ScanProjectRequest>,
+        ) -> String {
+            let root_dir = req.root_dir;
+            info!("scan_project: {}", root_dir);
+            let path = std::path::Path::new(&root_dir);
 
-        if !path.exists() {
-            return json!({ "error": format!("directory not found: {root_dir}") }).to_string();
-        }
+            if !path.exists() {
+                return json!({ "error": format!("directory not found: {root_dir}") }).to_string();
+            }
 
-        // Return cached model if directory structure unchanged
-        if let Ok(Some(cached)) = cache::get(&root_dir) {
-            info!("scan_project: cache hit for {}", root_dir);
-            return json!({ "status": "cached", "model": cached }).to_string();
-        }
+            // Return cached model if directory structure unchanged
+            if let Ok(Some(cached)) = cache::get(&root_dir) {
+                info!("scan_project: cache hit for {}", root_dir);
+                return json!({ "status": "cached", "model": cached }).to_string();
+            }
 
-        match scanner::scan(path) {
-            Ok(model) => {
-                if let Err(e) = cache::set(&root_dir, &model) {
-                    tracing::warn!("Failed to cache arch model: {}", e);
+            match scanner::scan(path) {
+                Ok(model) => {
+                    if let Err(e) = cache::set(&root_dir, &model) {
+                        tracing::warn!("Failed to cache arch model: {}", e);
+                    }
+                    info!(
+                        "scan_project: complete — style={}, layers={:?}",
+                        model.style,
+                        model.layer_order
+                    );
+                    json!({ "status": "ok", "model": model }).to_string()
                 }
-                info!(
-                    "scan_project: complete — style={}, layers={:?}",
-                    model.style,
-                    model.layer_order
-                );
-                json!({ "status": "ok", "model": model }).to_string()
-            }
-            Err(e) => {
-                tracing::error!("scan_project failed: {}", e);
-                json!({ "error": e.to_string() }).to_string()
+                Err(e) => {
+                    tracing::error!("scan_project failed: {}", e);
+                    json!({ "error": e.to_string() }).to_string()
+                }
             }
         }
-    }
 
     #[tool(description = "Stage 1 of the review workflow. Build the full-review prompt. \
             This must be called before run_full_review.")]
-    async fn build_full_review_prompt(
-        &self,
-        Parameters(req): Parameters<FullReviewPromptRequest>,
-    ) -> String {
-        let root_dir = req.root_dir;
-        let file_path = req.file_path;
-        let content = req.content;
+        async fn build_full_review_prompt(
+            &self,
+            Parameters(req): Parameters<FullReviewPromptRequest>,
+        ) -> String {
+            let root_dir = req.root_dir;
+            let file_path = req.file_path;
+            let content = req.content;
 
-        info!("build_full_review_prompt: {}", file_path);
+            info!("build_full_review_prompt: {}", file_path);
 
-        let model = match load_or_scan_model(&root_dir) {
-            Ok(model) => model,
-            Err(e) => {
-                return json!({ "error": e.to_string() }).to_string();
-            }
-        };
+            let model = match load_or_scan_model(&root_dir) {
+                Ok(model) => model,
+                Err(e) => {
+                    return json!({ "error": e.to_string() }).to_string();
+                }
+            };
 
-        match agent::build_full_review_prompt(&model, &file_path, &content).await {
-            Ok(prompt) => {
-                info!("build_full_review_prompt: complete for {}", file_path);
-                json!({
-                    "context_id": prompt.context_id,
-                    "status": prompt.status,
-                    "question": prompt.question,
-                    "domain_estimates": prompt.domain_estimates,
-                    "sats_available": prompt.sats_available,
-                    "total_estimated_price": prompt.total_estimated_price,
-                    "requires_user_selection": prompt.requires_user_selection,
-                    "present_estimated_price": prompt.present_estimated_price(),
-                    "present_domains_exceed_available_balance": prompt.present_domains_exceed_available_balance(),
-                    "selection_guidance": prompt.selection_guidance(),
-                    "insufficient_balance_reminder": if prompt.present_domains_exceed_available_balance() {
-                        Some("The currently present domains exceed sats_available. Ask the user to choose fewer domains or add more funds before continuing.")
-                    } else {
-                        None
-                    }
-                }).to_string()
-            }
-            Err(e) => {
-                tracing::error!("build_full_review_prompt failed: {}", e);
-                json!({ "error": e.to_string() }).to_string()
+            match agent::build_full_review_prompt(&model, &file_path, &content).await {
+                Ok(prompt) => {
+                    info!("build_full_review_prompt: complete for {}", file_path);
+                    json!({
+                        "context_id": prompt.context_id,
+                        "status": prompt.status,
+                        "question": prompt.question,
+                        "domain_estimates": prompt.domain_estimates,
+                        "sats_available": prompt.sats_available,
+                        "total_estimated_price": prompt.total_estimated_price,
+                        "requires_user_selection": prompt.requires_user_selection,
+                        "present_estimated_price": prompt.present_estimated_price(),
+                        "present_domains_exceed_available_balance": prompt.present_domains_exceed_available_balance(),
+                        "selection_guidance": prompt.selection_guidance(),
+                        "insufficient_balance_reminder": if prompt.present_domains_exceed_available_balance() {
+                            Some("The currently present domains exceed sats_available. Ask the user to choose fewer domains or add more funds before continuing.")
+                        } else {
+                            None
+                        }
+                    }).to_string()
+                }
+                Err(e) => {
+                    tracing::error!("build_full_review_prompt failed: {}", e);
+                    json!({ "error": e.to_string() }).to_string()
+                }
             }
         }
-    }
 
     #[tool(description = "Stage 2 of the review workflow. Run the full review. \
         This must be called after build_full_review_prompt and before run_intermediate_review.")]
-    async fn run_full_review(
-        &self,
-        Parameters(req): Parameters<FullReviewRequest>,
-    ) -> String {
-        let root_dir = req.root_dir;
-        let file_path = req.file_path;
-        let content = req.content;
+        async fn run_full_review(
+            &self,
+            Parameters(req): Parameters<FullReviewRequest>,
+        ) -> String {
+            let root_dir = req.root_dir;
+            let file_path = req.file_path;
+            let content = req.content;
 
-        info!("run_full_review: {}", file_path);
+            info!("run_full_review: {}", file_path);
 
-        let model = match load_or_scan_model(&root_dir) {
-            Ok(model) => model,
-            Err(e) => {
-                return json!({ "error": e.to_string() }).to_string();
-            }
-        };
+            let model = match load_or_scan_model(&root_dir) {
+                Ok(model) => model,
+                Err(e) => {
+                    return json!({ "error": e.to_string() }).to_string();
+                }
+            };
 
-        match agent::run_full_review(&model, &file_path, &content).await {
-            Ok(findings) => {
-                info!("run_full_review: {} finding(s) for {}", findings.len(), file_path);
-                json!({ "findings": findings }).to_string()
-            }
-            Err(e) => {
-                tracing::error!("run_full_review failed: {}", e);
-                json!({ "error": e.to_string() }).to_string()
+            match agent::run_full_review(&model, &file_path, &content).await {
+                Ok(findings) => {
+                    info!("run_full_review: {} finding(s) for {}", findings.len(), file_path);
+                    json!({ "findings": findings }).to_string()
+                }
+                Err(e) => {
+                    tracing::error!("run_full_review failed: {}", e);
+                    json!({ "error": e.to_string() }).to_string()
+                }
             }
         }
-    }
 
     #[tool(description = "Stage 3 of the review workflow. Run an intermediate review for a file change. \
         This must be called only after run_full_review has completed.")]
-    async fn run_intermediate_review(
-        &self,
-        Parameters(req): Parameters<IntermediateReviewRequest>,
-    ) -> String {
-        let root_dir = req.root_dir;
-        let file_path = req.file_path;
-        let content = req.content;
+        async fn run_intermediate_review(
+            &self,
+            Parameters(req): Parameters<IntermediateReviewRequest>,
+        ) -> String {
+            let root_dir = req.root_dir;
+            let file_path = req.file_path;
+            let content = req.content;
 
-        info!("run_intermediate_review: {}", file_path);
+            info!("run_intermediate_review: {}", file_path);
 
-        let model = match load_or_scan_model(&root_dir) {
-            Ok(model) => model,
-            Err(e) => {
-                return json!({ "error": e.to_string() }).to_string();
-            }
-        };
+            let model = match load_or_scan_model(&root_dir) {
+                Ok(model) => model,
+                Err(e) => {
+                    return json!({ "error": e.to_string() }).to_string();
+                }
+            };
 
-        match agent::run_intermediate_review(&model, &file_path, &content).await {
-            Ok(findings) => {
-                info!("run_intermediate_review: {} finding(s) for {}", findings.len(), file_path);
-                json!({ "findings": findings }).to_string()
-            }
-            Err(e) => {
-                tracing::error!("run_intermediate_review failed: {}", e);
-                json!({ "error": e.to_string() }).to_string()
+            match agent::run_intermediate_review(&model, &file_path, &content).await {
+                Ok(findings) => {
+                    info!("run_intermediate_review: {} finding(s) for {}", findings.len(), file_path);
+                    json!({ "findings": findings }).to_string()
+                }
+                Err(e) => {
+                    tracing::error!("run_intermediate_review failed: {}", e);
+                    json!({ "error": e.to_string() }).to_string()
+                }
             }
         }
-    }
 
     #[tool(description = "Clear the cached architecture model for a project. \
         Use this after major refactors to force a fresh scan.")]
-    async fn invalidate_cache(
-        &self,
-        Parameters(req): Parameters<InvalidateCacheRequest>,
-    ) -> String {
-        let root_dir = req.root_dir;
+        async fn invalidate_cache(
+            &self,
+            Parameters(req): Parameters<InvalidateCacheRequest>,
+        ) -> String {
+            let root_dir = req.root_dir;
 
-        match cache::invalidate(&root_dir) {
-            Ok(_) => json!({ "status": "cache cleared", "root": root_dir }).to_string(),
-            Err(e) => json!({ "error": e.to_string() }).to_string(),
+            match cache::invalidate(&root_dir) {
+                Ok(_) => json!({ "status": "cache cleared", "root": root_dir }).to_string(),
+                Err(e) => json!({ "error": e.to_string() }).to_string(),
+            }
         }
-    }
 }
 
 fn load_or_scan_model(root_dir: &str) -> Result<scanner::ArchModel> {
