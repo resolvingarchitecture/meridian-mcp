@@ -113,7 +113,23 @@ impl MeridianServer {
         match agent::build_full_review_prompt(&model, &file_path, &content).await {
             Ok(prompt) => {
                 info!("build_full_review_prompt: complete for {}", file_path);
-                json!({ "prompt": prompt }).to_string()
+                json!({
+                    "context_id": prompt.context_id,
+                    "status": prompt.status,
+                    "question": prompt.question,
+                    "domain_estimates": prompt.domain_estimates,
+                    "sats_available": prompt.sats_available,
+                    "total_estimated_price": prompt.total_estimated_price,
+                    "requires_user_selection": prompt.requires_user_selection,
+                    "present_estimated_price": prompt.present_estimated_price(),
+                    "present_domains_exceed_available_balance": prompt.present_domains_exceed_available_balance(),
+                    "selection_guidance": prompt.selection_guidance(),
+                    "insufficient_balance_reminder": if prompt.present_domains_exceed_available_balance() {
+                        Some("The currently present domains exceed sats_available. Ask the user to choose fewer domains or add more funds before continuing.")
+                    } else {
+                        None
+                    }
+                }).to_string()
             }
             Err(e) => {
                 tracing::error!("build_full_review_prompt failed: {}", e);
@@ -331,7 +347,21 @@ async fn cli_review_prompt(file_path: &str) -> Result<()> {
     let prompt = agent::build_full_review_prompt(&model, file_path, &content).await?;
 
     println!("{}", serde_json::to_string_pretty(&json!({
-        "prompt": prompt
+        "context_id": prompt.context_id,
+        "status": prompt.status,
+        "question": prompt.question,
+        "domain_estimates": prompt.domain_estimates,
+        "sats_available": prompt.sats_available,
+        "total_estimated_price": prompt.total_estimated_price,
+        "requires_user_selection": prompt.requires_user_selection,
+        "present_estimated_price": prompt.present_estimated_price(),
+        "present_domains_exceed_available_balance": prompt.present_domains_exceed_available_balance(),
+        "selection_guidance": prompt.selection_guidance(),
+        "insufficient_balance_reminder": if prompt.present_domains_exceed_available_balance() {
+            Some("The currently present domains exceed sats_available. Choose fewer domains or add more funds before continuing.")
+        } else {
+            None
+        }
     }))?);
 
     Ok(())

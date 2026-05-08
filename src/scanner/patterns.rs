@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 /// Detect common architectural patterns by sampling up to 40 source files.
 /// Looks for structural signatures — not deep semantic analysis.
-pub fn detect(root: &Path, all_paths: &[PathBuf]) -> Vec<String> {
+pub fn detect(_root: &Path, all_paths: &[PathBuf]) -> Vec<String> {
     let files = sample_source_files(all_paths, 40);
     let combined: String = files.iter()
         .filter_map(|f| std::fs::read_to_string(f).ok())

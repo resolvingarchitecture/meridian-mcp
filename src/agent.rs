@@ -73,9 +73,73 @@ struct ReviewRequest<'a> {
     content:    &'a str,
 }
 
-#[derive(Deserialize)]
-struct PromptResponse {
-    prompt: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Domain {
+    Application,
+    Integration,
+    Data,
+    Infrastructure,
+    Security,
+    Enterprise,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ComplexityModifier {
+    Simple,
+    Moderate,
+    Complex,
+    VeryComplex,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainEstimate {
+    pub domain: Domain,
+    pub present: bool,
+    pub estimated_components: i32,
+    pub complexity_modifier: ComplexityModifier,
+    pub estimated_price: u64,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DomainSelectionPrompt {
+    #[serde(rename = "context_id")]
+    pub context_id: String,
+    pub status: String,
+    pub question: String,
+    #[serde(rename = "domain_estimates")]
+    pub domain_estimates: Vec<DomainEstimate>,
+    #[serde(rename = "sats_available")]
+    pub sats_available: u64,
+    #[serde(rename = "total_estimated_price")]
+    pub total_estimated_price: u64,
+    #[serde(rename = "requires_user_selection")]
+    pub requires_user_selection: bool,
+}
+
+impl DomainSelectionPrompt {
+    pub fn present_estimated_price(&self) -> u64 {
+        self.domain_estimates
+            .iter()
+            .filter(|estimate| estimate.present)
+            .map(|estimate| estimate.estimated_price)
+            .sum()
+    }
+
+    pub fn selection_guidance(&self) -> Option<&'static str> {
+        if self.requires_user_selection {
+            Some("Present domain_estimates to the user. The selected domains' combined estimated_price must be less than or equal to sats_available. If the selection exceeds sats_available, ask the user to choose fewer domains or add more funds.")
+        } else {
+            None
+        }
+    }
+
+    pub fn present_domains_exceed_available_balance(&self) -> bool {
+        self.present_estimated_price() > self.sats_available
+    }
 }
 
 #[derive(Deserialize)]
@@ -201,14 +265,13 @@ async fn parse_review_response(response: reqwest::Response) -> Result<Vec<Findin
     }
 }
 
-async fn parse_prompt_response(response: reqwest::Response) -> Result<String> {
+async fn parse_prompt_response(response: reqwest::Response) -> Result<DomainSelectionPrompt> {
     match response.status() {
         s if s.is_success() => {
-            let data: PromptResponse = response
+            response
                 .json()
                 .await
-                .context("failed to parse backend prompt response")?;
-            Ok(data.prompt)
+                .context("failed to parse backend domain selection prompt response")
         }
         reqwest::StatusCode::UNAUTHORIZED => {
             invalidate_session().await;
@@ -231,7 +294,7 @@ pub async fn build_full_review_prompt(
     model:     &ArchModel,
     file_path: &str,
     content:   &str,
-) -> Result<String> {
+) -> Result<DomainSelectionPrompt> {
     let body = ReviewRequest { arch_model: model, file_path, content };
     let response = post_review_stage(FULL_REVIEW_PROMPT_PATH, &body).await?;
     parse_prompt_response(response).await
