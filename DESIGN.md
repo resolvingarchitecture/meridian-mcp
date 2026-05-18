@@ -38,7 +38,7 @@ Short form:
 - **CLI-compatible**: provide terminal workflows using the same scanner, cache, and backend relay path as MCP tools
 - **Backend-driven intelligence**: no AI calls from the binary itself
 - **Baseline-aware intermediate review**: only relay intermediate review requests when the backend can evaluate them against a prior full review baseline
-- **Decision-aware transport**: preserve enough context for the backend to classify recommendations, trade-offs, affected stakeholders, assumptions, and decision implications where supported
+- **Decision-aware transport**: preserve enough context for the backend to classify recommendations, trade-offs, required architectural stakeholders, affected parties, represented concerns, assumptions, and decision implications where supported
 - **Stable caching**: avoid rescanning unchanged projects unnecessarily
 
 ## Multi-root and multi-source architecture context
@@ -140,7 +140,7 @@ The review endpoints are expected to support a backend-owned workflow where:
 - completed full reviews create the baseline for future intermediate reviews;
 - intermediate reviews are evaluated against a prior full review baseline;
 - intermediate reviews recommend another full review when the change materially affects assumptions, scope, or risk posture;
-- architectural recommendations include enough structure for options, trade-offs, affected stakeholders, assumptions, consequences, and confidence when supported by the backend;
+- architectural recommendations include enough structure for options, trade-offs, architectural stakeholders with approval authority, affected parties, represented concerns, assumptions, consequences, and confidence when supported by the backend;
 - accepted architectural decisions remain customer-owned and require an accountable decision maker, rationale, decision date, and consensus state.
 
 The binary authenticates with a bearer API key using the `m_live_...` format.
@@ -437,15 +437,15 @@ Input schema:
 
 Expected response categories:
 
-| Category                 | Meaning                                                                 |
-|--------------------------|-------------------------------------------------------------------------|
-| Findings                 | Review findings were produced                                           |
-| Missing baseline         | No prior full review baseline exists for the relevant context/scope     |
-| Full review recommended  | The change may affect prior review assumptions or risk posture          |
-| Full review required     | The change materially exceeds or invalidates the prior baseline         |
-| Insufficient context     | More context is needed before the backend can provide useful output     |
-| Decision guidance        | Backend returned options, trade-offs, stakeholder impact, or assumptions |
-| Error                    | Authentication, usage, backend, parsing, or transport failure           |
+| Category                 | Meaning                                                                                       |
+|--------------------------|-----------------------------------------------------------------------------------------------|
+| Findings                 | Review findings were produced                                                                 |
+| Missing baseline         | No prior full review baseline exists for the relevant context/scope                           |
+| Full review recommended  | The change may affect prior review assumptions or risk posture                                |
+| Full review required     | The change materially exceeds or invalidates the prior baseline                               |
+| Insufficient context     | More context is needed before the backend can provide useful output                           |
+| Decision guidance        | Backend returned options, trade-offs, approval stakeholders, affected parties, or assumptions |
+| Error                    | Authentication, usage, backend, parsing, or transport failure                                 |
 
 This tool should:
 
@@ -786,9 +786,11 @@ Conceptual backend decision and consensus flow:
 ```text
 Recommendation or review finding
     → classify as architectural decision or supporting design
-    → identify affected stakeholders
+    → identify architectural stakeholders whose approval, signoff, or delegated authority is required
+    → identify affected parties separately from approval stakeholders
+    → identify represented concerns from affected parties
     → produce options, trade-offs, assumptions, consequences, and confidence
-    → customer accountable technical authority accepts, rejects, modifies, defers, or supersedes
+    → customer accountable decision authority accepts, rejects, modifies, defers, or supersedes
     → backend records decision outcome where supported
     → privacy-safe outcome feedback improves Meridian product intelligence
 ```

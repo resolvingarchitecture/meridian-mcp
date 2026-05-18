@@ -23,7 +23,7 @@
 - [x] Add support for session authentication upon successful backend auth with API key
 - [ ] Improve error messages when backend auth fails, balance/usage policy blocks review, or the backend is unreachable
 - [ ] Surface backend missing-context, targeted-question, and full-review recommendation responses clearly in MCP and CLI output
-- [ ] Surface backend decision guidance, trade-offs, stakeholder impact, assumptions, and confidence clearly when present
+- [ ] Surface backend decision guidance, trade-offs, architectural stakeholder approval impact, affected parties, represented concerns, assumptions, and confidence clearly when present
 - [ ] Ensure local review messaging says Meridian recommends and the customer organization decides
 - [ ] Ensure local review messaging does not imply Resolving Architecture approves customer-specific architecture decisions
 - [ ] Add end-to-end smoke tests for `scan_project`, `review_file`, and `invalidate_cache`
@@ -100,7 +100,9 @@
   - [ ] architectural decision vs supporting design classification
   - [ ] options considered
   - [ ] trade-offs
-  - [ ] affected stakeholders
+  - [ ] architectural stakeholders with approval authority
+  - [ ] affected parties
+  - [ ] represented concerns
   - [ ] assumptions
   - [ ] consequences
   - [ ] confidence
