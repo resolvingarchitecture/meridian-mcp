@@ -26,13 +26,16 @@ pub fn harvest(root: &Path) -> Vec<String> {
     // Scan known ADR directories
     for dir in ADR_DIRS {
         let full = root.join(dir);
-        if !full.is_dir() { continue; }
+        if !full.is_dir() {
+            continue;
+        }
 
         if let Ok(entries) = std::fs::read_dir(&full) {
             let mut files: Vec<_> = entries
                 .filter_map(|e| e.ok())
                 .filter(|e| {
-                    e.path().extension()
+                    e.path()
+                        .extension()
                         .and_then(|x| x.to_str())
                         .map(|x| x == "md")
                         .unwrap_or(false)
@@ -75,31 +78,34 @@ fn summarise_adr(path: &Path) -> Option<String> {
     let lines: Vec<&str> = content.lines().take(8).collect();
 
     // Extract title (first # heading)
-    let title = lines.iter()
+    let title = lines
+        .iter()
         .find(|l| l.starts_with("# "))
         .map(|l| l.trim_start_matches("# ").trim())
         .unwrap_or("Untitled ADR");
 
     // Extract status if present
-    let status = lines.iter()
+    let status = lines
+        .iter()
         .find(|l| {
             let lower = l.to_lowercase();
-            lower.contains("status:") || lower.contains("accepted")
-                || lower.contains("proposed") || lower.contains("deprecated")
+            lower.contains("status:")
+                || lower.contains("accepted")
+                || lower.contains("proposed")
+                || lower.contains("deprecated")
         })
         .map(|l| l.trim())
         .unwrap_or("accepted"); // assume accepted if no status line
 
-    let filename = path.file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("adr");
+    let filename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("adr");
 
     Some(format!("{filename}: {title} ({status})"))
 }
 
 fn summarise_doc(path: &Path) -> Option<String> {
     let content = std::fs::read_to_string(path).ok()?;
-    let first_heading = content.lines()
+    let first_heading = content
+        .lines()
         .find(|l| l.starts_with("# "))
         .map(|l| l.trim_start_matches("# ").trim().to_string())?;
 
@@ -110,13 +116,13 @@ fn summarise_doc(path: &Path) -> Option<String> {
 /// Last resort: find ARCH: or DECISION: comments inline in source files.
 fn scan_inline_decisions(root: &Path) -> Vec<String> {
     let mut decisions = vec![];
-    let walker = ignore::WalkBuilder::new(root)
-        .git_ignore(true)
-        .build();
+    let walker = ignore::WalkBuilder::new(root).git_ignore(true).build();
 
     for entry in walker.filter_map(|e| e.ok()) {
         let path = entry.path();
-        if !is_source_file(path) { continue; }
+        if !is_source_file(path) {
+            continue;
+        }
         if let Ok(content) = std::fs::read_to_string(path) {
             for line in content.lines() {
                 let trimmed = line.trim();
@@ -128,7 +134,9 @@ fn scan_inline_decisions(root: &Path) -> Vec<String> {
                         .trim()
                         .to_string();
                     decisions.push(decision);
-                    if decisions.len() >= 10 { return decisions; }
+                    if decisions.len() >= 10 {
+                        return decisions;
+                    }
                 }
             }
         }

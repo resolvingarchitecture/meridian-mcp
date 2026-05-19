@@ -13,7 +13,9 @@ import { OrderService } from '../services/OrderService';
 export class OrderController {
   constructor(private svc: OrderService) {}
 }
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
     // Services
     dir.child("src/services/OrderService.ts")
@@ -24,7 +26,9 @@ import { Order } from '../domain/Order';
 export class OrderService {
   constructor(private repo: OrderRepository) {}
 }
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
     // Domain — should not import from controllers or services
     dir.child("src/domain/Order.ts")
@@ -34,7 +38,9 @@ import { Money } from './Money';
 export class Order {
   constructor(public id: string, public total: Money) {}
 }
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
     dir.child("src/domain/Money.ts")
         .write_str("export record Money(amount: number, currency: string) {}")
@@ -49,7 +55,9 @@ import { Database } from '../infra/Database';
 export class OrderRepository {
   constructor(private db: Database) {}
 }
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
     // Infra
     dir.child("src/infra/Database.ts")

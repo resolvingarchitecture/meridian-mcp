@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 /// Looks for structural signatures — not deep semantic analysis.
 pub fn detect(_root: &Path, all_paths: &[PathBuf]) -> Vec<String> {
     let files = sample_source_files(all_paths, 40);
-    let combined: String = files.iter()
+    let combined: String = files
+        .iter()
         .filter_map(|f| std::fs::read_to_string(f).ok())
         .collect::<Vec<_>>()
         .join("\n");
@@ -21,8 +22,7 @@ pub fn detect(_root: &Path, all_paths: &[PathBuf]) -> Vec<String> {
 
     // Constructor injection
     if combined.contains("constructor(private")
-        || combined.contains("constructor(")
-            && combined.contains("private final")
+        || combined.contains("constructor(") && combined.contains("private final")
     {
         patterns.push("constructor_injection".to_string());
     }
@@ -41,7 +41,8 @@ pub fn detect(_root: &Path, all_paths: &[PathBuf]) -> Vec<String> {
     }
 
     // CQRS
-    if combined.contains("Command") && combined.contains("Query")
+    if combined.contains("Command")
+        && combined.contains("Query")
         && (combined.contains("Handler") || combined.contains("Bus"))
     {
         patterns.push("cqrs".to_string());
@@ -49,7 +50,8 @@ pub fn detect(_root: &Path, all_paths: &[PathBuf]) -> Vec<String> {
 
     // Event-driven
     if (combined.contains("Event") || combined.contains("event"))
-        && (combined.contains("publish") || combined.contains("dispatch")
+        && (combined.contains("publish")
+            || combined.contains("dispatch")
             || combined.contains("emit"))
     {
         patterns.push("domain_events".to_string());

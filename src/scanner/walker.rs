@@ -32,9 +32,7 @@ pub fn infer_layers(paths: &[PathBuf]) -> Vec<String> {
     }
     // Return in a stable, meaningful order
     let mut layers: Vec<String> = seen.into_iter().collect();
-    layers.sort_by_key(|l| {
-        KNOWN_LAYERS.iter().position(|&k| k == l).unwrap_or(99)
-    });
+    layers.sort_by_key(|l| KNOWN_LAYERS.iter().position(|&k| k == l).unwrap_or(99));
     layers
 }
 
@@ -53,7 +51,8 @@ pub fn get_layer(path: &std::path::Path, layers: &[String]) -> Option<String> {
 /// Prefers files in known layer directories.
 pub fn sample_source_files(paths: &[PathBuf], limit: usize) -> Vec<PathBuf> {
     let source_extensions = ["ts", "tsx", "js", "jsx", "java", "py", "go", "rs"];
-    paths.iter()
+    paths
+        .iter()
         .filter(|p| {
             p.extension()
                 .and_then(|e| e.to_str())
