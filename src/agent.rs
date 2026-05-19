@@ -10,7 +10,9 @@ use uuid::Uuid;
 static CLIENT: OnceLock<Client> = OnceLock::new();
 static SESSION: OnceLock<Arc<Mutex<Option<Session>>>> = OnceLock::new();
 
-const LOGIN_PATH: &str = "/security/login";
+const LOGIN_PATH: &str = "/api/security/login";
+const SESSION_REFRESH: &str = "/api/security/session/refresh";
+const LOGOUT_PATH: &str = "/api/security/logout";
 const CONTEXT_PATH: &str = "/api/context";
 const FULL_REVIEW_PROMPT_PATH: &str = "/api/skills/review/full/prompt";
 const FULL_REVIEW_PATH: &str = "/api/skills/review/full";
@@ -231,8 +233,7 @@ fn build_multiple_review_request(
     content: &str,
     options: ReviewOptions,
 ) -> MultipleReviewRequest {
-    let arch_model_json = serde_json::to_string_pretty(model)
-        .unwrap_or_else(|_| "{}".to_string());
+    let arch_model_json = serde_json::to_string_pretty(model).unwrap_or_else(|_| "{}".to_string());
 
     MultipleReviewRequest {
         request_id: Uuid::new_v4(),
@@ -250,14 +251,12 @@ fn build_multiple_review_request(
                 organization_context: None,
                 known_stakeholders: Vec::new(),
                 known_decisions: Vec::new(),
-                content: vec![
-                    DocumentContent {
-                        content_type: ContentType::Text,
-                        media_type: "application/json".to_string(),
-                        encoding: ContentEncoding::Utf8,
-                        data: arch_model_json,
-                    },
-                ],
+                content: vec![DocumentContent {
+                    content_type: ContentType::Text,
+                    media_type: "application/json".to_string(),
+                    encoding: ContentEncoding::Utf8,
+                    data: arch_model_json,
+                }],
             },
             DocumentInput {
                 id: file_path.to_string(),
@@ -271,14 +270,12 @@ fn build_multiple_review_request(
                 organization_context: None,
                 known_stakeholders: Vec::new(),
                 known_decisions: Vec::new(),
-                content: vec![
-                    DocumentContent {
-                        content_type: ContentType::Code,
-                        media_type: "text/plain".to_string(),
-                        encoding: ContentEncoding::Utf8,
-                        data: content.to_string(),
-                    },
-                ],
+                content: vec![DocumentContent {
+                    content_type: ContentType::Code,
+                    media_type: "text/plain".to_string(),
+                    encoding: ContentEncoding::Utf8,
+                    data: content.to_string(),
+                }],
             },
         ],
         options,
@@ -287,24 +284,17 @@ fn build_multiple_review_request(
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
-    pub severity:      String,
+    pub severity: String,
     #[serde(rename = "type")]
-    pub finding_type:  String,
-    pub file:          String,
-    pub line:          Option<u32>,
-    pub title:         String,
-    pub explanation:   String,
-    pub consequence:   String,
-    pub suggestion:    String,
+    pub finding_type: String,
+    pub file: String,
+    pub line: Option<u32>,
+    pub title: String,
+    pub explanation: String,
+    pub consequence: String,
+    pub suggestion: String,
     pub adr_reference: Option<String>,
-    pub confidence:    f64,
-}
-
-#[derive(Serialize)]
-struct ReviewRequest<'a> {
-    arch_model: &'a ArchModel,
-    file_path:  &'a str,
-    content:    &'a str,
+    pub confidence: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -382,16 +372,31 @@ struct ReviewResponse {
 }
 
 #[derive(Deserialize)]
-struct LoginResponse {
+struct AuthNResult {
+    #[serde(rename = "sessionId")]
     session_id: String,
+    #[serde(rename = "expiresAt")]
     expires_at: u64,
+    status: Option<i32>,
+    message: Option<String>,
 }
 
 async fn session_id(api_key: &str, backend_url: &str) -> Result<String> {
-    {
+    let refreshable_session = {
         let session = session_cache().lock().await;
-        if let Some(session) = session.as_ref().filter(|session| session.is_valid()) {
-            return Ok(session.session_id.clone());
+        match session.as_ref() {
+            Some(session) if session.is_valid() => {
+                return Ok(session.session_id.clone());
+            }
+            Some(session) => Some(session.session_id.clone()),
+            None => None,
+        }
+    };
+
+    if let Some(current_session_id) = refreshable_session {
+        match refresh_session(&current_session_id, backend_url).await {
+            Ok(new_session_id) => return Ok(new_session_id),
+            Err(_) => invalidate_session().await,
         }
     }
 
@@ -410,7 +415,7 @@ async fn login(api_key: &str, backend_url: &str) -> Result<String> {
 
     match response.status() {
         s if s.is_success() => {
-            let data: LoginResponse = response
+            let data: AuthNResult = response
                 .json()
                 .await
                 .context("failed to parse backend login response")?;
@@ -431,6 +436,77 @@ async fn login(api_key: &str, backend_url: &str) -> Result<String> {
         status => {
             let body = response.text().await.unwrap_or_default();
             anyhow::bail!("backend login error {status}: {body}")
+        }
+    }
+}
+
+async fn refresh_session(current_session_id: &str, backend_url: &str) -> Result<String> {
+    let url = format!("{backend_url}{SESSION_REFRESH}");
+
+    let response = http()
+        .post(&url)
+        .bearer_auth(current_session_id)
+        .send()
+        .await
+        .context("failed to reach backend session refresh endpoint")?;
+
+    match response.status() {
+        s if s.is_success() => {
+            let data: AuthNResult = response
+                .json()
+                .await
+                .context("failed to parse backend session refresh response")?;
+
+            let session = Session {
+                session_id: data.session_id.clone(),
+                expires_at: data.expires_at,
+            };
+
+            let mut cached_session = session_cache().lock().await;
+            *cached_session = Some(session);
+
+            Ok(data.session_id)
+        }
+        reqwest::StatusCode::UNAUTHORIZED => {
+            anyhow::bail!("backend session refresh rejected current session")
+        }
+        status => {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("backend session refresh error {status}: {body}")
+        }
+    }
+}
+
+pub async fn logout() -> Result<()> {
+    let backend_url = std::env::var("MERIDIAN_BACKEND_URL")
+        .unwrap_or_else(|_| "https://resolvingarchitecture.io/meridian/api".to_string());
+
+    let cached_session_id = {
+        let session = session_cache().lock().await;
+        session.as_ref().map(|session| session.session_id.clone())
+    };
+
+    let Some(current_session_id) = cached_session_id else {
+        return Ok(());
+    };
+
+    let url = format!("{backend_url}{LOGOUT_PATH}");
+
+    let response = http()
+        .post(&url)
+        .bearer_auth(&current_session_id)
+        .send()
+        .await
+        .context("failed to reach backend logout endpoint")?;
+
+    invalidate_session().await;
+
+    match response.status() {
+        s if s.is_success() => Ok(()),
+        reqwest::StatusCode::UNAUTHORIZED => Ok(()),
+        status => {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("backend logout error {status}: {body}")
         }
     }
 }
@@ -487,10 +563,7 @@ async fn post_context(body: &ContentEnrichmentRequest) -> Result<reqwest::Respon
     Ok(response)
 }
 
-async fn post_review_stage(
-    path: &str,
-    body: &MultipleReviewRequest,
-) -> Result<reqwest::Response> {
+async fn post_review_stage(path: &str, body: &MultipleReviewRequest) -> Result<reqwest::Response> {
     let api_key = crate::config::api_key()?;
     let backend_url = std::env::var("MERIDIAN_BACKEND_URL")
         .unwrap_or_else(|_| "https://resolvingarchitecture.io/meridian/api".to_string());
@@ -534,12 +607,10 @@ async fn parse_review_response(response: reqwest::Response) -> Result<Vec<Findin
 
 async fn parse_prompt_response(response: reqwest::Response) -> Result<DomainSelectionPrompt> {
     match response.status() {
-        s if s.is_success() => {
-            response
-                .json()
-                .await
-                .context("failed to parse backend domain selection prompt response")
-        }
+        s if s.is_success() => response
+            .json()
+            .await
+            .context("failed to parse backend domain selection prompt response"),
         reqwest::StatusCode::UNAUTHORIZED => {
             invalidate_session().await;
             anyhow::bail!("backend session expired or was rejected after re-login")
@@ -556,12 +627,10 @@ async fn parse_prompt_response(response: reqwest::Response) -> Result<DomainSele
 
 async fn parse_context_response(response: reqwest::Response) -> Result<ContextResponse> {
     match response.status() {
-        s if s.is_success() => {
-            response
-                .json()
-                .await
-                .context("failed to parse backend context response")
-        }
+        s if s.is_success() => response
+            .json()
+            .await
+            .context("failed to parse backend context response"),
         reqwest::StatusCode::UNAUTHORIZED => {
             invalidate_session().await;
             anyhow::bail!("backend session expired or was rejected after re-login")
@@ -598,16 +667,12 @@ pub async fn add_context(context: ArchitectureContext) -> Result<ContextResponse
 ///
 /// This must be called before requesting a full review.
 pub async fn build_full_review_prompt(
-    model:     &ArchModel,
+    model: &ArchModel,
     file_path: &str,
-    content:   &str,
+    content: &str,
 ) -> Result<DomainSelectionPrompt> {
-    let body = build_multiple_review_request(
-        model,
-        file_path,
-        content,
-        ReviewOptions::default_options(),
-    );
+    let body =
+        build_multiple_review_request(model, file_path, content, ReviewOptions::default_options());
     let response = post_review_stage(FULL_REVIEW_PROMPT_PATH, &body).await?;
     parse_prompt_response(response).await
 }
@@ -616,16 +681,12 @@ pub async fn build_full_review_prompt(
 ///
 /// This must be called after the full-review prompt stage.
 pub async fn run_full_review(
-    model:     &ArchModel,
+    model: &ArchModel,
     file_path: &str,
-    content:   &str,
+    content: &str,
 ) -> Result<Vec<Finding>> {
-    let body = build_multiple_review_request(
-        model,
-        file_path,
-        content,
-        ReviewOptions::default_options(),
-    );
+    let body =
+        build_multiple_review_request(model, file_path, content, ReviewOptions::default_options());
     let response = post_review_stage(FULL_REVIEW_PATH, &body).await?;
     parse_review_response(response).await
 }
@@ -634,9 +695,9 @@ pub async fn run_full_review(
 ///
 /// This must be called only after the full review stage has completed.
 pub async fn run_intermediate_review(
-    model:     &ArchModel,
+    model: &ArchModel,
     file_path: &str,
-    content:   &str,
+    content: &str,
 ) -> Result<Vec<Finding>> {
     let body = build_multiple_review_request(
         model,

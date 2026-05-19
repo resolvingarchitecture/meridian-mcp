@@ -44,7 +44,7 @@ pub fn get(root: &str) -> Result<Option<ArchModel>> {
 
 /// Store an ArchModel in the cache.
 pub fn set(root: &str, model: &ArchModel) -> Result<()> {
-    let key   = cache_key(root)?;
+    let key = cache_key(root)?;
     let bytes = serde_json::to_vec(model)?;
     db()?.insert(key, bytes)?;
     Ok(())
