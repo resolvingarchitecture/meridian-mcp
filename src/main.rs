@@ -141,7 +141,10 @@ impl MeridianServer {
         description = "Stage 1 of the review workflow. Build the full-review prompt. \
             This must be called before run_full_review."
     )]
-    async fn build_full_review_prompt(&self, Parameters(req): Parameters<FullReviewPromptRequest>) -> String {
+    async fn build_full_review_prompt(
+        &self,
+        Parameters(req): Parameters<FullReviewPromptRequest>,
+    ) -> String {
         let root_dir = req.root_dir;
         let file_path = req.file_path;
         let content = req.content;
@@ -183,10 +186,8 @@ impl MeridianServer {
         }
     }
 
-    #[tool(
-        description = "Stage 2 of the review workflow. Run the full review. \
-        This must be called after build_full_review_prompt and before run_intermediate_review."
-    )]
+    #[tool(description = "Stage 2 of the review workflow. Run the full review. \
+        This must be called after build_full_review_prompt and before run_intermediate_review.")]
     async fn run_full_review(&self, Parameters(req): Parameters<FullReviewRequest>) -> String {
         let root_dir = req.root_dir;
         let file_path = req.file_path;
@@ -203,7 +204,11 @@ impl MeridianServer {
 
         match agent::run_full_review(&model, &file_path, &content).await {
             Ok(findings) => {
-                info!("run_full_review: {} finding(s) for {}", findings.len(), file_path);
+                info!(
+                    "run_full_review: {} finding(s) for {}",
+                    findings.len(),
+                    file_path
+                );
                 json!({ "findings": findings }).to_string()
             }
             Err(e) => {
@@ -236,7 +241,11 @@ impl MeridianServer {
 
         match agent::run_intermediate_review(&model, &file_path, &content).await {
             Ok(findings) => {
-                info!("run_intermediate_review: {} finding(s) for {}", findings.len(), file_path);
+                info!(
+                    "run_intermediate_review: {} finding(s) for {}",
+                    findings.len(),
+                    file_path
+                );
                 json!({ "findings": findings }).to_string()
             }
             Err(e) => {
@@ -246,10 +255,8 @@ impl MeridianServer {
         }
     }
 
-    #[tool(
-        description = "Clear the cached architecture model for a project. \
-        Use this after major refactors to force a fresh scan."
-    )]
+    #[tool(description = "Clear the cached architecture model for a project. \
+        Use this after major refactors to force a fresh scan.")]
     async fn invalidate_cache(
         &self,
         Parameters(req): Parameters<InvalidateCacheRequest>,
@@ -319,9 +326,7 @@ async fn run_cli(args: Vec<String>) -> Result<()> {
                     .context("usage: meridian review intermediate <file_path>")?;
                 cli_review_intermediate(file_path).await
             }
-            Some(file_path) => {
-                cli_review_guidance(file_path)
-            }
+            Some(file_path) => cli_review_guidance(file_path),
             None => {
                 anyhow::bail!(
                     "usage: meridian review <file_path>\n       meridian review <prompt|full|intermediate> <file_path>"
@@ -349,13 +354,29 @@ async fn run_cli(args: Vec<String>) -> Result<()> {
                 anyhow::bail!("usage: meridian context <template|add> [json_file]");
             }
         },
+        Some("test") => match args.get(2).map(String::as_str) {
+            Some("backend") => cli_test_backend().await,
+            _ => {
+                anyhow::bail!("usage: meridian test backend");
+            }
+        },
+        Some("login") => cli_login().await,
         Some("logout") => cli_logout().await,
-        Some("config") => match (args.get(2).map(String::as_str), args.get(3).map(String::as_str)) {
+        Some("config") => match (
+            args.get(2).map(String::as_str),
+            args.get(3).map(String::as_str),
+        ) {
             (Some("set"), Some("api-key")) => {
                 let key = args
                     .get(4)
                     .context("usage: meridian config set api-key <key>")?;
                 cli_config_set_api_key(key)
+            }
+            (Some("set"), Some("backend-url")) => {
+                let backend_url = args
+                    .get(4)
+                    .context("usage: meridian config set backend-url <url>")?;
+                cli_config_set_backend_url(backend_url)
             }
             _ => {
                 anyhow::bail!("usage: meridian config set api-key <key>");
@@ -383,16 +404,21 @@ fn cli_scan(roots: &[String]) -> Result<()> {
         scanned.push(cli_scan_one(root)?);
     }
 
-    let any_missing_adrs = scanned
-        .iter()
-        .any(|entry| entry["model"]["adrs"].as_array().is_some_and(|adrs| adrs.is_empty()));
+    let any_missing_adrs = scanned.iter().any(|entry| {
+        entry["model"]["adrs"]
+            .as_array()
+            .is_some_and(|adrs| adrs.is_empty())
+    });
 
-    println!("{}", serde_json::to_string_pretty(&json!({
-        "status": "ok",
-        "source_count": scanned.len(),
-        "sources": scanned,
-        "workflow_guidance": multi_source_scan_workflow_guidance(any_missing_adrs)
-    }))?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": "ok",
+            "source_count": scanned.len(),
+            "sources": scanned,
+            "workflow_guidance": multi_source_scan_workflow_guidance(any_missing_adrs)
+        }))?
+    );
 
     Ok(())
 }
@@ -416,8 +442,8 @@ fn cli_scan_one(root: &str) -> Result<serde_json::Value> {
         }));
     }
 
-    let model = scanner::scan(path)
-        .with_context(|| format!("failed to scan source root: {root}"))?;
+    let model =
+        scanner::scan(path).with_context(|| format!("failed to scan source root: {root}"))?;
 
     cache::set(root, &model)
         .with_context(|| format!("failed to cache architecture model for: {root}"))?;
@@ -478,23 +504,26 @@ async fn cli_review_prompt(file_path: &str) -> Result<()> {
 
     let prompt = agent::build_full_review_prompt(&model, file_path, &content).await?;
 
-    println!("{}", serde_json::to_string_pretty(&json!({
-        "context_id": prompt.context_id,
-        "status": prompt.status,
-        "question": prompt.question,
-        "domain_estimates": prompt.domain_estimates,
-        "sats_available": prompt.sats_available,
-        "total_estimated_price": prompt.total_estimated_price,
-        "requires_user_selection": prompt.requires_user_selection,
-        "present_estimated_price": prompt.present_estimated_price(),
-        "present_domains_exceed_available_balance": prompt.present_domains_exceed_available_balance(),
-        "selection_guidance": prompt.selection_guidance(),
-        "insufficient_balance_reminder": if prompt.present_domains_exceed_available_balance() {
-            Some("The currently present domains exceed sats_available. Choose fewer domains or add more funds before continuing.")
-        } else {
-            None
-        }
-    }))?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "context_id": prompt.context_id,
+            "status": prompt.status,
+            "question": prompt.question,
+            "domain_estimates": prompt.domain_estimates,
+            "sats_available": prompt.sats_available,
+            "total_estimated_price": prompt.total_estimated_price,
+            "requires_user_selection": prompt.requires_user_selection,
+            "present_estimated_price": prompt.present_estimated_price(),
+            "present_domains_exceed_available_balance": prompt.present_domains_exceed_available_balance(),
+            "selection_guidance": prompt.selection_guidance(),
+            "insufficient_balance_reminder": if prompt.present_domains_exceed_available_balance() {
+                Some("The currently present domains exceed sats_available. Choose fewer domains or add more funds before continuing.")
+            } else {
+                None
+            }
+        }))?
+    );
 
     Ok(())
 }
@@ -504,9 +533,12 @@ async fn cli_review_full(file_path: &str) -> Result<()> {
 
     let findings = agent::run_full_review(&model, file_path, &content).await?;
 
-    println!("{}", serde_json::to_string_pretty(&json!({
-        "findings": findings
-    }))?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "findings": findings
+        }))?
+    );
 
     Ok(())
 }
@@ -516,52 +548,58 @@ async fn cli_review_intermediate(file_path: &str) -> Result<()> {
 
     let findings = agent::run_intermediate_review(&model, file_path, &content).await?;
 
-    println!("{}", serde_json::to_string_pretty(&json!({
-        "findings": findings
-    }))?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "findings": findings
+        }))?
+    );
 
     Ok(())
 }
 
 fn cli_review_guidance(file_path: &str) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(&json!({
-        "status": "guidance",
-        "file_path": file_path,
-        "message": "Meridian review is a staged workflow. Scan architecture-significant sources first, add context if ADRs are missing, then run a full review. Intermediate review is only valid after a successful full review has established a backend baseline.",
-        "workflow": [
-            {
-                "step": 1,
-                "command": "meridian scan [root_dir]",
-                "purpose": "Scan a directory containing architecture-significant artifacts, ADRs, architecture docs, code structure, infrastructure definitions, or related design material."
-            },
-            {
-                "step": 2,
-                "command": "meridian context template > meridian-context.json",
-                "purpose": "Use this if the scan finds no ADRs or if the backend needs more architecture context."
-            },
-            {
-                "step": 3,
-                "command": "meridian context add meridian-context.json",
-                "purpose": "Send stakeholders, concerns, agreed decisions, constraints, risks, standards, and non-functional requirements to the backend as architecture context."
-            },
-            {
-                "step": 4,
-                "command": format!("meridian review prompt {file_path}"),
-                "purpose": "Ask the backend for full-review preparation guidance, domain estimates, missing context, or selection prompts."
-            },
-            {
-                "step": 5,
-                "command": format!("meridian review full {file_path}"),
-                "purpose": "Attempt a full review. A successful full review establishes the backend baseline for later intermediate reviews."
-            },
-            {
-                "step": 6,
-                "command": format!("meridian review intermediate {file_path}"),
-                "purpose": "Use only after a successful full review baseline exists for the relevant architecture scope."
-            }
-        ],
-        "decision_authority": "Meridian recommends. The customer organization decides."
-    }))?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": "guidance",
+            "file_path": file_path,
+            "message": "Meridian review is a staged workflow. Scan architecture-significant sources first, add context if ADRs are missing, then run a full review. Intermediate review is only valid after a successful full review has established a backend baseline.",
+            "workflow": [
+                {
+                    "step": 1,
+                    "command": "meridian scan [root_dir]",
+                    "purpose": "Scan a directory containing architecture-significant artifacts, ADRs, architecture docs, code structure, infrastructure definitions, or related design material."
+                },
+                {
+                    "step": 2,
+                    "command": "meridian context template > meridian-context.json",
+                    "purpose": "Use this if the scan finds no ADRs or if the backend needs more architecture context."
+                },
+                {
+                    "step": 3,
+                    "command": "meridian context add meridian-context.json",
+                    "purpose": "Send stakeholders, concerns, agreed decisions, constraints, risks, standards, and non-functional requirements to the backend as architecture context."
+                },
+                {
+                    "step": 4,
+                    "command": format!("meridian review prompt {file_path}"),
+                    "purpose": "Ask the backend for full-review preparation guidance, domain estimates, missing context, or selection prompts."
+                },
+                {
+                    "step": 5,
+                    "command": format!("meridian review full {file_path}"),
+                    "purpose": "Attempt a full review. A successful full review establishes the backend baseline for later intermediate reviews."
+                },
+                {
+                    "step": 6,
+                    "command": format!("meridian review intermediate {file_path}"),
+                    "purpose": "Use only after a successful full review baseline exists for the relevant architecture scope."
+                }
+            ],
+            "decision_authority": "Meridian recommends. The customer organization decides."
+        }))?
+    );
 
     Ok(())
 }
@@ -580,8 +618,7 @@ fn prepare_cli_review(file_path: &str) -> Result<(scanner::ArchModel, String)> {
     let content = std::fs::read_to_string(&file)
         .with_context(|| format!("failed to read file: {file_path}"))?;
 
-    let root = std::env::current_dir()
-        .context("failed to determine current directory")?;
+    let root = std::env::current_dir().context("failed to determine current directory")?;
 
     let root_str = root.to_string_lossy().to_string();
 
@@ -599,62 +636,67 @@ fn prepare_cli_review(file_path: &str) -> Result<(scanner::ArchModel, String)> {
 }
 
 fn cli_cache_clear(root: &str) -> Result<()> {
-    cache::invalidate(root)
-        .with_context(|| format!("failed to clear cache for: {root}"))?;
+    cache::invalidate(root).with_context(|| format!("failed to clear cache for: {root}"))?;
 
-    println!("{}", serde_json::to_string_pretty(&json!({
-        "status": "cache cleared",
-        "root": root
-    }))?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": "cache cleared",
+            "root": root
+        }))?
+    );
 
     Ok(())
 }
 
 fn cli_context_template() -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(&json!({
-        "organization_context": {
-            "name": "",
-            "domain": "",
-            "system_or_product": "",
-            "summary": ""
-        },
-        "business_goals": [
-            ""
-        ],
-        "stakeholders": [
-            {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "organization_context": {
                 "name": "",
-                "role": "",
-                "decision_authority": "",
-                "concerns": [
-                    ""
-                ]
-            }
-        ],
-        "decisions": [
-            {
-                "title": "",
-                "status": "proposed|accepted|rejected|superseded",
-                "rationale": "",
-                "consequences": [
-                    ""
-                ]
-            }
-        ],
-        "constraints": [
-            ""
-        ],
-        "risks": [
-            ""
-        ],
-        "standards": [
-            ""
-        ],
-        "scope_notes": [
-            ""
-        ],
-        "freeform_notes": "Add any missing architecture context, non-functional requirements, quality attributes, assumptions, or open questions here."
-    }))?);
+                "domain": "",
+                "system_or_product": "",
+                "summary": ""
+            },
+            "business_goals": [
+                ""
+            ],
+            "stakeholders": [
+                {
+                    "name": "",
+                    "role": "",
+                    "decision_authority": "",
+                    "concerns": [
+                        ""
+                    ]
+                }
+            ],
+            "decisions": [
+                {
+                    "title": "",
+                    "status": "proposed|accepted|rejected|superseded",
+                    "rationale": "",
+                    "consequences": [
+                        ""
+                    ]
+                }
+            ],
+            "constraints": [
+                ""
+            ],
+            "risks": [
+                ""
+            ],
+            "standards": [
+                ""
+            ],
+            "scope_notes": [
+                ""
+            ],
+            "freeform_notes": "Add any missing architecture context, non-functional requirements, quality attributes, assumptions, or open questions here."
+        }))?
+    );
 
     Ok(())
 }
@@ -668,17 +710,36 @@ async fn cli_context_add(file_path: &str) -> Result<()> {
 
     let response = agent::add_context(context).await?;
 
-    println!("{}", serde_json::to_string_pretty(&json!({
-        "status": "ok",
-        "context_id": response.context_id,
-        "context_percent_used": response.context_percent_used,
-        "message": response.message,
-        "next_steps": [
-            "meridian review prompt <file_path>",
-            "meridian review full <file_path>",
-            "After a successful full review, use: meridian review intermediate <file_path>"
-        ]
-    }))?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": "ok",
+            "context_id": response.context_id,
+            "context_percent_used": response.context_percent_used,
+            "message": response.message,
+            "next_steps": [
+                "meridian review prompt <file_path>",
+                "meridian review full <file_path>",
+                "After a successful full review, use: meridian review intermediate <file_path>"
+            ]
+        }))?
+    );
+
+    Ok(())
+}
+
+async fn cli_test_backend() -> Result<()> {
+    let response = agent::test_backend_health().await?;
+
+    println!("{}", serde_json::to_string_pretty(&response)?);
+
+    Ok(())
+}
+
+async fn cli_login() -> Result<()> {
+    let response = agent::test_login().await?;
+
+    println!("{}", serde_json::to_string_pretty(&response)?);
 
     Ok(())
 }
@@ -686,10 +747,13 @@ async fn cli_context_add(file_path: &str) -> Result<()> {
 async fn cli_logout() -> Result<()> {
     agent::logout().await?;
 
-    println!("{}", serde_json::to_string_pretty(&json!({
-        "status": "ok",
-        "message": "session logged out"
-    }))?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": "ok",
+            "message": "session logged out"
+        }))?
+    );
 
     Ok(())
 }
@@ -701,11 +765,30 @@ fn cli_config_set_api_key(key: &str) -> Result<()> {
 
     config::set_api_key(key)?;
 
-    println!("{}", serde_json::to_string_pretty(&json!({
-        "status": "ok",
-        "message": "API key saved",
-        "config_file": config::config_file_display_path()
-    }))?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": "ok",
+            "message": "API key saved",
+            "config_file": config::config_file_display_path()
+        }))?
+    );
+
+    Ok(())
+}
+
+fn cli_config_set_backend_url(backend_url: &str) -> Result<()> {
+    config::set_backend_url(backend_url)?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": "ok",
+            "message": "Backend URL saved",
+            "backend_url": backend_url.trim_end_matches('/'),
+            "config_file": config::config_file_display_path()
+        }))?
+    );
 
     Ok(())
 }
@@ -714,24 +797,32 @@ fn cli_doctor() -> Result<()> {
     let env_api_key = std::env::var("MERIDIAN_API_KEY").ok();
     let configured_api_key = config::load()?.api_key;
 
-    let api_key_status = if env_api_key.as_deref().is_some_and(|key| !key.trim().is_empty()) {
+    let api_key_status = if env_api_key
+        .as_deref()
+        .is_some_and(|key| !key.trim().is_empty())
+    {
         "set via MERIDIAN_API_KEY"
-    } else if configured_api_key.as_deref().is_some_and(|key| !key.trim().is_empty()) {
+    } else if configured_api_key
+        .as_deref()
+        .is_some_and(|key| !key.trim().is_empty())
+    {
         "set in local config"
     } else {
         "missing"
     };
 
-    let backend_url = std::env::var("MERIDIAN_BACKEND_URL")
-        .unwrap_or_else(|_| "https://resolvingarchitecture.io/meridian/api".to_string());
+    let backend_url = config::backend_url()?;
 
-    println!("{}", serde_json::to_string_pretty(&json!({
-        "status": if api_key_status == "missing" { "warning" } else { "ok" },
-        "version": env!("CARGO_PKG_VERSION"),
-        "api_key": api_key_status,
-        "backend_url": backend_url,
-        "config_file": config::config_file_display_path()
-    }))?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": if api_key_status == "missing" { "warning" } else { "ok" },
+            "version": env!("CARGO_PKG_VERSION"),
+            "api_key": api_key_status,
+            "backend_url": backend_url,
+            "config_file": config::config_file_display_path()
+        }))?
+    );
 
     if api_key_status == "missing" {
         eprintln!("warning: no API key configured. Run: meridian config set api-key <key>");
@@ -755,6 +846,9 @@ Usage:
   meridian review intermediate <file_path>
   meridian cache clear [root_dir]
   meridian config set api-key <key>
+  meridian config set backend-url <url>
+  meridian test backend
+  meridian login
   meridian logout
   meridian doctor
   meridian version
@@ -808,10 +902,15 @@ Environment:
 }
 
 async fn run_mcp_server() -> Result<()> {
-    info!("meridian starting in MCP mode (v{})", env!("CARGO_PKG_VERSION"));
+    info!(
+        "meridian starting in MCP mode (v{})",
+        env!("CARGO_PKG_VERSION")
+    );
 
     if crate::config::api_key().is_err() {
-        eprintln!("ERROR: MERIDIAN_API_KEY environment variable not set and no local API key configured.");
+        eprintln!(
+            "ERROR: MERIDIAN_API_KEY environment variable not set and no local API key configured."
+        );
         eprintln!("Run: meridian config set api-key <key>");
         eprintln!("Get your API key at https://resolvingarchitecture.io/meridian");
         std::process::exit(1);
@@ -834,8 +933,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
-            std::env::var("MERIDIAN_LOG")
-                .unwrap_or_else(|_| "meridian=info".to_string())
+            std::env::var("MERIDIAN_LOG").unwrap_or_else(|_| "meridian=info".to_string()),
         )
         .init();
 

@@ -13,6 +13,7 @@ static SESSION: OnceLock<Arc<Mutex<Option<Session>>>> = OnceLock::new();
 const LOGIN_PATH: &str = "/api/security/login";
 const SESSION_REFRESH: &str = "/api/security/session/refresh";
 const LOGOUT_PATH: &str = "/api/security/logout";
+const HEALTH_HEARTBEAT_PATH: &str = "/api/health/heartbeat";
 const CONTEXT_PATH: &str = "/api/context";
 const FULL_REVIEW_PROMPT_PATH: &str = "/api/skills/review/full/prompt";
 const FULL_REVIEW_PATH: &str = "/api/skills/review/full";
@@ -371,14 +372,32 @@ struct ReviewResponse {
     findings: Vec<Finding>,
 }
 
-#[derive(Deserialize)]
-struct AuthNResult {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthHeartbeat {
+    pub status: String,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthNResult {
     #[serde(rename = "sessionId")]
-    session_id: String,
+    pub session_id: String,
     #[serde(rename = "expiresAt")]
-    expires_at: u64,
-    status: Option<i32>,
-    message: Option<String>,
+    pub expires_at: u64,
+    pub status: Option<i32>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AuthNRequest {
+    #[serde(rename = "rawKey")]
+    raw_key: String,
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
+    username: Option<String>,
+    phone: Option<String>,
+    email: Option<String>,
+    password: Option<String>,
 }
 
 async fn session_id(api_key: &str, backend_url: &str) -> Result<String> {
@@ -404,11 +423,24 @@ async fn session_id(api_key: &str, backend_url: &str) -> Result<String> {
 }
 
 async fn login(api_key: &str, backend_url: &str) -> Result<String> {
+    let data = login_result(api_key, backend_url).await?;
+    Ok(data.session_id)
+}
+
+async fn login_result(api_key: &str, backend_url: &str) -> Result<AuthNResult> {
     let url = format!("{backend_url}{LOGIN_PATH}");
+    let body = AuthNRequest {
+        raw_key: api_key.trim().to_string(),
+        session_id: None,
+        username: None,
+        phone: None,
+        email: None,
+        password: None,
+    };
 
     let response = http()
         .post(&url)
-        .bearer_auth(api_key)
+        .json(&body)
         .send()
         .await
         .context("failed to reach backend login endpoint")?;
@@ -428,10 +460,18 @@ async fn login(api_key: &str, backend_url: &str) -> Result<String> {
             let mut cached_session = session_cache().lock().await;
             *cached_session = Some(session);
 
-            Ok(data.session_id)
+            Ok(data)
         }
         reqwest::StatusCode::UNAUTHORIZED => {
             anyhow::bail!("invalid API key — check MERIDIAN_API_KEY")
+        }
+        reqwest::StatusCode::FORBIDDEN => {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("backend login forbidden: {body}")
+        }
+        reqwest::StatusCode::BAD_REQUEST => {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("backend login request rejected: {body}")
         }
         status => {
             let body = response.text().await.unwrap_or_default();
@@ -478,8 +518,7 @@ async fn refresh_session(current_session_id: &str, backend_url: &str) -> Result<
 }
 
 pub async fn logout() -> Result<()> {
-    let backend_url = std::env::var("MERIDIAN_BACKEND_URL")
-        .unwrap_or_else(|_| "https://resolvingarchitecture.io/meridian/api".to_string());
+    let backend_url = crate::config::backend_url()?;
 
     let cached_session_id = {
         let session = session_cache().lock().await;
@@ -546,8 +585,7 @@ async fn send_context_request(
 
 async fn post_context(body: &ContentEnrichmentRequest) -> Result<reqwest::Response> {
     let api_key = crate::config::api_key()?;
-    let backend_url = std::env::var("MERIDIAN_BACKEND_URL")
-        .unwrap_or_else(|_| "https://resolvingarchitecture.io/meridian/api".to_string());
+    let backend_url = crate::config::backend_url()?;
 
     let url = format!("{backend_url}{CONTEXT_PATH}");
 
@@ -565,8 +603,7 @@ async fn post_context(body: &ContentEnrichmentRequest) -> Result<reqwest::Respon
 
 async fn post_review_stage(path: &str, body: &MultipleReviewRequest) -> Result<reqwest::Response> {
     let api_key = crate::config::api_key()?;
-    let backend_url = std::env::var("MERIDIAN_BACKEND_URL")
-        .unwrap_or_else(|_| "https://resolvingarchitecture.io/meridian/api".to_string());
+    let backend_url = crate::config::backend_url()?;
 
     let url = format!("{backend_url}{path}");
 
@@ -596,7 +633,9 @@ async fn parse_review_response(response: reqwest::Response) -> Result<Vec<Findin
             anyhow::bail!("backend session expired or was rejected after re-login")
         }
         reqwest::StatusCode::TOO_MANY_REQUESTS => {
-            anyhow::bail!("monthly review limit reached — visit https://resolvingarchitecture.io/meridian")
+            anyhow::bail!(
+                "monthly review limit reached — visit https://resolvingarchitecture.io/meridian"
+            )
         }
         status => {
             let body = response.text().await.unwrap_or_default();
@@ -616,7 +655,9 @@ async fn parse_prompt_response(response: reqwest::Response) -> Result<DomainSele
             anyhow::bail!("backend session expired or was rejected after re-login")
         }
         reqwest::StatusCode::TOO_MANY_REQUESTS => {
-            anyhow::bail!("monthly review limit reached — visit https://resolvingarchitecture.io/meridian")
+            anyhow::bail!(
+                "monthly review limit reached — visit https://resolvingarchitecture.io/meridian"
+            )
         }
         status => {
             let body = response.text().await.unwrap_or_default();
@@ -648,6 +689,37 @@ async fn parse_context_response(response: reqwest::Response) -> Result<ContextRe
             anyhow::bail!("backend context error {status}: {body}")
         }
     }
+}
+
+/// Test backend reachability using the unsecured health heartbeat endpoint.
+pub async fn test_backend_health() -> Result<HealthHeartbeat> {
+    let backend_url = crate::config::backend_url()?;
+    let url = format!("{backend_url}{HEALTH_HEARTBEAT_PATH}");
+
+    let response = http()
+        .get(&url)
+        .send()
+        .await
+        .context("failed to reach backend health heartbeat endpoint")?;
+
+    match response.status() {
+        s if s.is_success() => response
+            .json()
+            .await
+            .context("failed to parse backend health heartbeat response"),
+        status => {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("backend health heartbeat error {status}: {body}")
+        }
+    }
+}
+
+/// Test backend login and return the AuthNResult.
+pub async fn test_login() -> Result<AuthNResult> {
+    let api_key = crate::config::api_key()?;
+    let backend_url = crate::config::backend_url()?;
+
+    login_result(&api_key, &backend_url).await
 }
 
 /// Add persistent architecture context to the backend.

@@ -6,6 +6,11 @@ architectural violation detection powered by AI.
 ## Install
 
 ```bash
+# From source
+cargo install --path .
+```
+
+```bash
 # Via cargo
 cargo install meridian-mcp
 
