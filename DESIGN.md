@@ -8,18 +8,26 @@ It is the single local Meridian client install.
 
 Its job is to:
 
-1. Scan a codebase and build a lightweight architecture model
-2. Cache that model locally
-3. Expose MCP tools to IDEs and MCP-compatible clients
-4. Provide CLI commands for setup, diagnostics, scanning, cache control, and manual review
-5. Review saved files or manually selected files by relaying requests to the Meridian backend
-6. Surface backend review findings, readiness responses, missing context, baseline state, and full-review recommendations clearly
+1. Scan one or more local sources and build or extend a cached lightweight architecture model
+2. Add discovered supporting context, such as ADRs, architecture documents, contracts, deployment files, or other non-code sources, to that same model when available
+3. Reuse the cached architecture model for full-review prompt generation, full review, and intermediate review workflows
+4. Expose MCP tools to IDEs and MCP-compatible clients
+5. Provide CLI commands for setup, diagnostics, scanning, cache control, and manual review
+6. Review saved files or manually selected files by relaying requests to the Meridian backend
+7. Surface backend review findings, readiness responses, missing context, baseline state, and full-review recommendations clearly
 
-It must stay thin. All architectural judgment, context sufficiency assessment, review readiness decisions, prompt construction, provider orchestration, billing enforcement, full review baseline management, decision governance, rule lifecycle management, and persistence of product data belong in the backend or internal services.
+It must stay thin. All architectural judgment, context sufficiency assessment, review readiness 
+decisions, prompt construction, provider orchestration, billing enforcement, full review baseline 
+management, decision governance, rule lifecycle management, and persistence of product data belong 
+in the backend or internal services.
 
-Meridian's product position is broader than file review. Meridian is an **Agentic Architect**: an architecture assistant for assessment, design support, feasibility analysis, technology evaluation, transition planning, and governance.
+Meridian's product position is broader than file review. Meridian is an **Agentic Architect**: an
+architecture assistant for assessment, design support, feasibility analysis, technology evaluation, 
+transition planning, and governance.
 
-`meridian-mcp` supports that product model locally by collecting structural project facts and relaying requests. It does not decide architecture, approve architecture decisions, own stakeholder consensus, or act as the customer's accountable technical authority.
+`meridian-mcp` supports that product model locally by collecting structural project facts and 
+relaying requests. It does not decide architecture, approve architecture decisions, own stakeholder 
+consensus, or act as the customer's accountable technical authority.
 
 Short form:
 
@@ -59,30 +67,33 @@ Real systems commonly span multiple roots and information sources, including:
 - security, compliance, or operational documentation;
 - vendor or integration reference material.
 
-Each root may be reviewed separately, but several roots may also belong to one larger architecture context or full review baseline.
+Each source may be scanned separately, but several sources may also contribute to one larger cached architecture model 
+for the same Meridian architecture context or full review baseline.
 
 Examples:
 
-| Review shape                  | Meaning                                                                         |
-|-------------------------------|---------------------------------------------------------------------------------|
-| Single-root review            | One application or repository is reviewed on its own                            |
+| Review shape                  | Meaning                                                                          |
+|-------------------------------|----------------------------------------------------------------------------------|
+| Single-root review            | One application or repository is reviewed on its own                             |
 | Multi-root application review | Frontend, backend, infrastructure, and ADR roots are reviewed as one application |
-| Portfolio or platform review  | Multiple applications or services are reviewed as part of a larger system       |
-| Source-of-information review  | Code, docs, diagrams, ADRs, deployment files, and API contracts are evidence    |
+| Portfolio or platform review  | Multiple applications or services are reviewed as part of a larger system        |
+| Source-of-information review  | Code, docs, diagrams, ADRs, deployment files, and API contracts are evidence     |
 
 The MCP client should therefore treat `root_dir` as a local source root, not as the whole architecture by default.
 
-A Meridian architecture context may be associated with one root, several roots, or non-code sources. The backend remains responsible for deciding how those roots relate to a full review baseline, review scope, and intermediate review eligibility.
+A Meridian architecture context may be associated with one root, several roots, or non-code sources. 
+The backend remains responsible for deciding how those sources relate to a full review baseline, review scope, 
+and intermediate review eligibility.
 
 The local client should support this model by:
 
-- scanning roots independently;
-- caching architecture models per root;
-- allowing tools to accept one or more roots where appropriate;
-- preserving root identity in review requests;
-- distinguishing the local workspace root from the backend architecture context;
-- avoiding assumptions that one IDE workspace equals one reviewed system;
-- allowing future IDEs and agents to associate multiple local roots with a single Meridian context.
+- scanning one or more sources independently
+- building and appending to one lightweight cached architecture model for the selected Meridian architecture context where supported
+- adding discovered non-code evidence as context to the model instead of treating it as a separate review target by default
+- preserving source identity in the model and review requests
+- distinguishing the local workspace root from the backend architecture context
+- avoiding assumptions that one IDE workspace equals one reviewed system
+- allowing future IDEs and agents to associate multiple local sources with a single Meridian context
 
 ---
 
@@ -105,20 +116,20 @@ The current Meridian architecture places product intelligence in the backend and
 
 The backend owns:
 
-- access validation;
-- usage and payment enforcement;
-- context sufficiency assessment;
-- review readiness decisions;
-- full review baseline creation and lookup;
-- intermediate review eligibility;
-- deterministic rules-assisted review;
-- prompt construction;
-- AI provider orchestration;
-- finding and report validation;
-- recommendation quality controls;
-- architecture decision records;
-- trade-off and stakeholder-consensus workflows;
-- product telemetry and privacy-safe learning.
+- access validation
+- usage and payment enforcement
+- context sufficiency assessment
+- review readiness decisions
+- full review baseline creation and lookup
+- intermediate review eligibility
+- deterministic rules-assisted review
+- prompt construction
+- AI provider orchestration
+- finding and report validation
+- recommendation quality controls
+- architecture decision records
+- trade-off and stakeholder-consensus workflows
+- product telemetry and privacy-safe learning
 
 The backend currently exposes:
 
@@ -152,10 +163,12 @@ The binary authenticates with a bearer API key using the `m_live_...` format.
 ```text
 IDE / MCP client 
     → meridian-mcp MCP server mode 
-    → scan repository 
-    → cache ArchModel locally 
-    → on file review, send file 
-        + ArchModel to backend 
+    → scan one or more local sources 
+    → build or extend cached ArchModel 
+    → add discovered ADRs, architecture docs, contracts, deployment files, and other context where available
+    → on full-review prompt or full review, send cached ArchModel to backend
+    → on file/intermediate review, send file content 
+        + cached ArchModel to backend 
             → backend validates API key 
             → backend enforces usage and payment policy 
             → backend locates prior full review baseline for intermediate review 
@@ -366,13 +379,15 @@ The binary exposes Meridian tools through MCP tool discovery. Each tool should i
 
 The core MCP tool set is:
 
-| Tool                         | Responsibility                               |
-|------------------------------|----------------------------------------------|
-| `scan_project(root_dir)`     | Build and cache the local architecture model |
-| `review_file(...)`           | Review one file against cached local facts   |
-| `invalidate_cache(root_dir)` | Drop cached model and force a fresh scan     |
+| Tool                         | Responsibility                                                                  |
+|------------------------------|---------------------------------------------------------------------------------|
+| `scan_project(root_dir)`     | Build or extend the cached local architecture model from one local source root   |
+| `review_prompt(...)`         | Ask the backend for full-review readiness or prompt guidance using cached model  |
+| `review_full(...)`           | Request a full architecture review using cached model context                    |
+| `review_file(...)`           | Review one file or change against cached local facts and backend baseline policy |
+| `invalidate_cache(root_dir)` | Drop cached model data and force a fresh scan                                    |
 
-Additional tools such as `scan_roots` or `get_project_status` may be added when the backend and IDE workflow need first-class multi-root or status discovery support.
+Additional tools such as `scan_sources`, `scan_roots`, or `get_project_status` may be added when the backend and IDE workflow need first-class multi-source or status discovery support.
 
 The tool list is consumed by both:
 
@@ -385,12 +400,13 @@ Tools that accept `root_dir` operate on a local source root. They must not imply
 
 Where practical, future tool versions should support either:
 
-- a single `root_dir` for root-scoped operations; or
-- a `root_dirs` array for workspace, application, or context-scoped operations involving several roots.
+- a single `root_dir` for source-scoped operations;
+- a `root_dirs` array for workspace, application, or context-scoped operations involving several roots; or
+- a source list that can include code roots, document roots, contracts, infrastructure files, diagrams, or other architecture evidence.
 
 ### `scan_project(root_dir)`
 
-Scans one local source root and caches the architecture model for that root.
+Scans one local source root and builds or extends the cached architecture model for the relevant local architecture context.
 
 Use when:
 
@@ -398,7 +414,7 @@ Use when:
 - the user asks for a refresh;
 - the cache is missing or stale;
 - the user switches branches or performs a significant refactor;
-- architecture-relevant files or ADRs change.
+- architecture-relevant files, ADRs, contracts, deployment files, or architecture documents change.
 
 Input schema:
 
@@ -410,13 +426,91 @@ Expected response:
 
 - scan completed successfully;
 - scan failed with actionable diagnostics;
-- cache updated or reused, depending on implementation.
+- cached model created, extended, updated, or reused, depending on implementation.
 
-This tool performs local project analysis only. It should not make final architecture judgments.
+This tool performs local source analysis only. It should not make final architecture judgments.
+
+### `review_prompt(context_id?)`
+
+Requests backend-owned full-review prompt guidance using the cached architecture model.
+
+Use when:
+
+- a user or IDE agent wants to start a full architecture review;
+- the local architecture model has already been built from one or more scanned sources;
+- the backend needs to assess whether submitted and stored context is sufficient before full-review execution;
+- the backend may need to return missing context, limitations, targeted questions, or domain-selection guidance.
+
+Input schema:
+
+| Field        | Required | Purpose                                                                    |
+|--------------|----------|----------------------------------------------------------------------------|
+| `context_id` | No       | Meridian architecture context associated with the relevant backend context |
+
+Expected response categories:
+
+| Category             | Meaning                                                                           |
+|----------------------|-----------------------------------------------------------------------------------|
+| Ready                | Backend has enough context to proceed                                             |
+| Partial              | Backend can proceed only with clearly stated limitations or provisional guidance   |
+| Insufficient context | More context is needed before a useful full review can be produced                |
+| Missing context      | Backend returned specific missing information or targeted questions               |
+| Domain guidance      | Backend returned domain-selection or pricing-related prompt information           |
+| Error                | Authentication, usage, backend, parsing, or transport failure                     |
+
+This tool should:
+
+- load the cached architecture model;
+- include source identities represented in the cached model;
+- include context identity when available;
+- forward the request to the backend full-review prompt endpoint;
+- let the backend determine context sufficiency, readiness, and prompt requirements;
+- return backend guidance clearly to the client.
+
+This tool should not require a file name or file content. It should not construct final prompts locally.
+
+### `review_full(context_id?)`
+
+Requests a full architecture review using the cached architecture model and backend-owned full-review policy.
+
+Use when:
+
+- the user explicitly requests a full review;
+- the backend prompt/readiness stage indicates the context is ready or acceptable to proceed;
+- one or more local sources have already contributed to the cached architecture model;
+- the backend will create or update the full-review baseline if the review completes successfully.
+
+Input schema:
+
+| Field        | Required | Purpose                                                                    |
+|--------------|----------|----------------------------------------------------------------------------|
+| `context_id` | No       | Meridian architecture context associated with the relevant backend context |
+
+Expected response categories:
+
+| Category             | Meaning                                                                                       |
+|----------------------|-----------------------------------------------------------------------------------------------|
+| Full review report   | Backend produced a full architecture review                                                    |
+| Missing context      | Backend needs more context before producing a credible full review                             |
+| Partial              | Backend returned limited or provisional output with stated limitations                         |
+| Decision guidance    | Backend returned options, trade-offs, approval stakeholders, affected parties, or assumptions |
+| Baseline created     | Backend created or updated a full-review baseline where supported                              |
+| Error                | Authentication, usage, backend, parsing, or transport failure                                  |
+
+This tool should:
+
+- load the cached architecture model;
+- include all source identities represented in the cached model;
+- include context identity when available;
+- forward the request to the backend full-review endpoint;
+- let the backend determine readiness, baseline creation, and review scope;
+- surface backend missing-context, readiness, decision-guidance, and baseline responses clearly.
+
+This tool should not require a file name or file content. It should not create a review baseline locally and should not make review-readiness decisions locally.
 
 ### `review_file(root_dir, file_path, content, context_id?)`
 
-Reviews one file or change using the cached architecture model for its source root and backend-owned review policy.
+Reviews one file or change using the cached architecture model and backend-owned review policy.
 
 Use when:
 
@@ -449,7 +543,7 @@ Expected response categories:
 
 This tool should:
 
-- load the cached model for the file's source root;
+- load the cached model for the relevant architecture context or source root;
 - include source root identity in the backend request;
 - include context identity when available;
 - if necessary, trigger or request a fresh scan for that root;
@@ -464,47 +558,19 @@ This tool should:
 
 This tool should not create a review baseline locally and should not be described as a standalone full architecture review.
 
-### `invalidate_cache(root_dir)`
+### Future `scan_sources(sources, context_id?)`
 
-Drops the cached model for a project.
-
-Use when:
-
-- a major refactor changes structure;
-- the scan is clearly stale;
-- the user explicitly requests a rescan;
-- the user switches branches and the cached model is no longer reliable.
-
-Input schema:
-
-| Field      | Required | Purpose                                            |
-|------------|----------|----------------------------------------------------|
-| `root_dir` | Yes      | Absolute or host-resolved path to the project root |
-
-Expected response:
-
-- cache invalidated;
-- cache was already absent;
-- invalidation failed with actionable diagnostics.
-
-### Future `scan_roots(root_dirs, context_id?)`
-
-A future MCP tool may scan several local source roots and cache an architecture model for each root.
+A future MCP tool may scan several local sources and build or extend one cached architecture model for the selected Meridian architecture context.
 
 Use when:
 
 - an IDE workspace contains multiple applications or repositories;
 - a user or agent wants to prepare several roots for the same Meridian architecture context;
 - frontend, backend, infrastructure, and documentation roots should be reviewed together;
-- an architecture context spans multiple local folders.
+- an architecture context spans multiple local folders or document sources;
+- code, ADRs, contracts, deployment manifests, and supporting documentation should all contribute evidence to one model.
 
-This tool should not merge roots into one architecture model locally unless explicitly designed to do so. It should preserve each root's identity and let the backend interpret the larger architecture relationship.
-
-### Future `get_project_status(root_dir?, root_dirs?, context_id?)`
-
-A future MCP tool may expose status-oriented information so IDEs and agents can understand whether Meridian is configured, scanned, associated with a backend context, and eligible for review.
-
-This tool should not make backend-owned review decisions locally. It should aggregate local cache state and backend-provided product state into a response that IDEs can display clearly.
+This tool should preserve source identity while appending discovered architecture facts and context into the cached model. The backend remains responsible for interpreting whether those sources belong to one review scope, several independent scopes, or a larger portfolio context.
 
 ---
 
@@ -536,10 +602,12 @@ The architecture model is intentionally compact.
 
 It should capture:
 
-- source root identity;
-- project root path;
+- model identity;
+- source identities for all scanned roots or inputs represented in the model;
+- project root paths where applicable;
 - optional workspace identity;
 - optional architecture context ID;
+- source type or role where known, such as codebase, ADR collection, API contract, infrastructure, data model, security document, operations document, or vendor reference;
 - inferred layers;
 - layer order;
 - inferred architectural style;
@@ -548,14 +616,15 @@ It should capture:
 - dependency relationships relevant to architecture review;
 - ADR references;
 - architecture-document references;
+- other discovered supporting context references;
 - scan timestamp;
 - cache key or freshness metadata.
 
 It should not try to be a complete code index.
 
-A single scanned root produces a local architecture model for that root. A larger Meridian review may combine several root-level models with user-provided architecture context and other sources of information.
+A single scanned source may create a local architecture model. Later scans may append additional structural facts or supporting context to that same model when they are associated with the same Meridian architecture context. A larger Meridian review may combine code-derived facts with user-provided architecture context and other sources of information.
 
-The MCP client should not decide that multiple roots form one system of record. It should preserve root identity and provide scanned facts to the backend. The backend owns the interpretation of whether roots should be reviewed independently or together as part of a larger full review baseline.
+The MCP client should not decide that multiple sources form one system of record. It should preserve source identity and provide scanned facts to the backend. The backend owns the interpretation of whether sources should be reviewed independently or together as part of a larger full review baseline.
 
 ### Design principle
 
@@ -689,26 +758,27 @@ Review-related MCP calls should map to the review endpoints the backend currentl
 
 A review request conceptually includes:
 
-- architecture model for the relevant source root;
-- optional architecture models for related roots when supported;
-- source root identity;
+- cached architecture model for the relevant Meridian architecture context;
+- source identities represented in the model;
 - optional workspace identity;
-- file path;
-- file content;
 - optional review scope;
 - optional user-provided architecture context;
 - optional context id or baseline lookup key;
 - optional source identity or local root hint;
-- project root or equivalent project identity fields as required by the backend contract.
+- project root or equivalent project identity fields as required by the backend contract;
+- file path and file content only for file-specific or intermediate review workflows.
 
 Full reviews and intermediate reviews have different backend-owned requirements:
 
 | Review type         | Backend-owned requirement                                               |
 |---------------------|-------------------------------------------------------------------------|
+| Full review prompt  | Enough cached or submitted context to assess readiness and guide review |
 | Full review         | Enough submitted or stored context to create a credible review baseline |
 | Intermediate review | Prior full review baseline for the same relevant architecture scope     |
 
-A backend architecture context may include one source root, several source roots, or non-code sources. The local client may provide architecture models and file content, but it must not decide whether roots form one review scope, whether a review is ready, whether a baseline exists, whether a recommendation is an accepted decision, or whether another full review is required.
+A backend architecture context may include one source root, several source roots, or non-code sources. The local client may provide architecture models and file content when needed, but it must not decide whether roots form one review scope, whether a review is ready, whether a baseline exists, whether a recommendation is an accepted decision, or whether another full review is required.
+
+Full-review prompt and full-review requests should use the cached architecture model directly. They should not require a file name or file content.
 
 ### Authentication
 
@@ -852,166 +922,4 @@ The CLI may also support a local config file for values such as API key and back
 - enforce usage policy locally
 - persist user account data
 - duplicate backend review policy
-- duplicate backend deterministic rules
-- perform context sufficiency assessment
-- decide full review readiness
-- create or own full review baselines
-- decide intermediate review eligibility
-- decide whether another full review is needed
-- construct final review prompts
-- call AI providers directly
-- depend on Node or JVM runtime locally
-- own customer architecture decision authority
-- manage stakeholder consensus
-- store architecture decision records as product data
-- expose rule-mining functionality as a public MCP capability
-
----
-
-## Rule Miner boundary
-
-`meridian-rule-miner` is internal/admin infrastructure for improving the rule corpus.
-
-It owns:
-
-- external source registry
-- source approval and license policy
-- source profiling
-- rule gap analysis
-- mining plan generation
-- budget-limited internal runs
-- candidate rule extraction
-- candidate normalization and deduplication
-- candidate evidence
-- rule lifecycle support
-- governance workflows
-
-`meridian-mcp` must not own or expose those workflows.
-
-Rule Miner is:
-
-- admin-only
-- budget-limited
-- license-aware
-- source-attributed
-- isolated from customer-facing review traffic
-- unable to activate externally derived rules automatically
-
-The local client may benefit from rules improved through backend governance, but it should not know or care whether a backend rule originated from customer feedback, internal analysis, or Rule Miner.
-
----
-
-## Release and distribution
-
-The release workflow builds platform binaries for:
-
-- Linux x86_64
-- macOS x86_64
-- macOS arm64
-- Windows x86_64
-
-Distribution channels should remain:
-
-- `cargo install`
-- install script
-- GitHub Releases
-
-The release artifacts, executable names, command names, environment variables, and documentation should continue converging on Meridian naming.
-
----
-
-## Design risks
-
-### 1. Naming drift
-
-Some repository artifacts still reflect older naming. This can confuse users, release automation, environment configuration, and CLI command discovery.
-
-### 2. Backend contract drift
-
-If backend review endpoints, auth schema, payment behavior, usage behavior, readiness responses, baseline contracts, decision contracts, full-review recommendation states, or response schemas change, the binary must stay in lockstep.
-
-### 3. Over-scanning
-
-Too much scanning work during startup can hurt perceived performance. The scan model should remain intentionally light.
-
-### 4. Local complexity creep
-
-The binary should not absorb analysis logic that belongs in the backend, including rules execution, readiness assessment, baseline management, prompt construction, decision governance, billing policy, and usage policy.
-
-### 5. Cache staleness
-
-A stale model produces misleading review results. Invalidation should remain reliable and simple.
-
-### 6. CLI / MCP behavior divergence
-
-The CLI and MCP tools should reuse the same scanner, cache, and backend relay path. Divergent implementations would create inconsistent findings and support burden.
-
-### 7. Protocol/logging mistakes
-
-MCP mode requires stdout to remain protocol-safe. Logs and diagnostics must go to stderr or structured CLI output where appropriate.
-
-### 8. Intermediate review without baseline
-
-If local tooling presents intermediate review as a standalone first-contact review, it will conflict with Meridian's product model. The local client should surface the backend's recommendation to run a full review when no prior baseline exists.
-
-### 9. Unclear full-review recommendation messaging
-
-When the backend recommends or requires another full review, the local client must present the reason clearly enough for a developer to understand that the change may have exceeded the prior architecture baseline.
-
-### 10. Multi-root ambiguity
-
-A workspace may contain several repositories, applications, shared libraries, infrastructure roots, and documentation sources. Treating the workspace root as the entire architecture can produce misleading review context.
-
-The local client should preserve source root identity, cache roots independently, and let the backend determine whether roots should be reviewed independently or as part of a larger architecture context.
-
-### 11. Context association drift
-
-A source root may be associated with the wrong Meridian context, or a context may no longer represent the current set of roots after repository changes, branch switches, or workspace reconfiguration.
-
-The local client should make root-to-context association visible and easy to refresh, but the backend should remain the source of truth for review scope and baseline interpretation.
-
-### 12. Decision-authority confusion
-
-Meridian may recommend architectural decisions, but the customer organization decides. If local tooling presents recommendations as approved decisions, it will violate the product model.
-
-The local client should render backend recommendations, trade-offs, and decision prompts as advisory output. It should not imply that Meridian or Resolving Architecture has approved a customer-specific decision.
-
----
-
-## Design boundaries for future work
-
-Planned extensions should preserve the same split:
-
-- `meridian-mcp`: local scanning, local cache, MCP transport, CLI transport, backend relay
-- `meridian-backend`: intelligence, rules, policy, billing, payments, usage, AI orchestration, product persistence, review baselines, architecture decision records, and customer-facing decision workflows
-- `meridian-rule-miner`: internal rule improvement and governance
-- IDE extensions: presentation and workflow integration only
-- web application: account, payment, dashboard, report, decision register, and user-facing product surfaces
-
-If future features add more local heuristics, they should still be shaped as:
-
-- model enrichment
-- local diagnostics
-- transport improvements
-- cache quality improvements
-
-They should not become:
-
-- AI reasoning
-- final architectural judgment
-- pricing or billing logic
-- usage policy enforcement
-- backend rules duplication
-- prompt construction
-- architecture decision authority
-- stakeholder consensus management
-- admin rule-mining behavior
-
----
-
-## Summary
-
-`meridian-mcp` is a fast, auditable, local Meridian client runtime. Its architecture is intentionally narrow: scan, cache, expose MCP tools, expose CLI commands, and relay review requests to the backend.
-
-Anything that looks like product intelligence, customer policy, context sufficiency assessment, review readiness, full review baseline management, intermediate review eligibility, billing, payment, usage enforcement, AI orchestration, decision governance, stakeholder consensus, recommendation outcome learning, or rule governance should move to or stay in the backend and internal services.
-```
+-

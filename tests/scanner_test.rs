@@ -75,22 +75,34 @@ export class OrderRepository {
 #[test]
 fn detects_layers_in_layered_project() {
     let project = make_layered_project();
-    let model = scanner::scan(project.path()).unwrap();
+    let component = scanner::scan(project.path()).unwrap();
 
     assert!(
-        model.layers.iter().any(|l| l == "controllers"),
+        component
+            .observations
+            .layers
+            .iter()
+            .any(|l| l == "controllers"),
         "should detect controllers"
     );
     assert!(
-        model.layers.iter().any(|l| l == "services"),
+        component
+            .observations
+            .layers
+            .iter()
+            .any(|l| l == "services"),
         "should detect services"
     );
     assert!(
-        model.layers.iter().any(|l| l == "domain"),
+        component.observations.layers.iter().any(|l| l == "domain"),
         "should detect domain"
     );
     assert!(
-        model.layers.iter().any(|l| l == "repositories"),
+        component
+            .observations
+            .layers
+            .iter()
+            .any(|l| l == "repositories"),
         "should detect repositories"
     );
 }
@@ -98,24 +110,35 @@ fn detects_layers_in_layered_project() {
 #[test]
 fn infers_layered_ddd_style() {
     let project = make_layered_project();
-    let model = scanner::scan(project.path()).unwrap();
-    assert_eq!(model.style, "layered_ddd");
+    let component = scanner::scan(project.path()).unwrap();
+    assert_eq!(component.observations.style.as_deref(), Some("layered_ddd"));
 }
 
 #[test]
 fn harvests_adrs() {
     let project = make_layered_project();
-    let model = scanner::scan(project.path()).unwrap();
-    assert!(!model.adrs.is_empty(), "should harvest at least one ADR");
-    assert!(model.adrs[0].contains("ADR-001"));
+    let component = scanner::scan(project.path()).unwrap();
+    assert!(
+        !component.observations.adrs.is_empty(),
+        "should harvest at least one ADR"
+    );
+    assert!(component.observations.adrs[0].contains("ADR-001"));
 }
 
 #[test]
 fn domain_appears_last_in_layer_order() {
     let project = make_layered_project();
-    let model = scanner::scan(project.path()).unwrap();
-    let domain_pos = model.layer_order.iter().position(|l| l == "domain");
-    let ctrl_pos = model.layer_order.iter().position(|l| l == "controllers");
+    let component = scanner::scan(project.path()).unwrap();
+    let domain_pos = component
+        .observations
+        .layer_order
+        .iter()
+        .position(|l| l == "domain");
+    let ctrl_pos = component
+        .observations
+        .layer_order
+        .iter()
+        .position(|l| l == "controllers");
     if let (Some(d), Some(c)) = (domain_pos, ctrl_pos) {
         assert!(
             d > c,
@@ -127,9 +150,9 @@ fn domain_appears_last_in_layer_order() {
 #[test]
 fn handles_empty_project_gracefully() {
     let dir = TempDir::new().unwrap();
-    let model = scanner::scan(dir.path()).unwrap();
-    assert!(model.layers.is_empty());
-    assert_eq!(model.style, "modular");
+    let component = scanner::scan(dir.path()).unwrap();
+    assert!(component.observations.layers.is_empty());
+    assert_eq!(component.observations.style.as_deref(), Some("modular"));
 }
 
 #[test]
@@ -138,7 +161,19 @@ fn handles_project_with_no_adrs() {
     dir.child("src/services/Foo.ts")
         .write_str("export class Foo {}")
         .unwrap();
-    let model = scanner::scan(dir.path()).unwrap();
+    let component = scanner::scan(dir.path()).unwrap();
     // Should not panic — adrs can be empty
-    assert!(model.adrs.len() < 10);
+    assert!(component.observations.adrs.len() < 10);
+}
+
+#[test]
+fn architecture_model_is_built_from_components() {
+    let project = make_layered_project();
+    let component = scanner::scan(project.path()).unwrap();
+
+    let model = scanner::ArchitectureModel::from_component(component);
+
+    assert_eq!(model.components.len(), 1);
+    assert!(model.has_adrs());
+    assert_eq!(model.style_summary(), "layered_ddd");
 }

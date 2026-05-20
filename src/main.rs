@@ -113,20 +113,13 @@ impl MeridianServer {
             return json!({ "error": format!("directory not found: {root_dir}") }).to_string();
         }
 
-        // Return cached model if directory structure unchanged
-        if let Ok(Some(cached)) = cache::get(&root_dir) {
-            info!("scan_project: cache hit for {}", root_dir);
-            return json!({ "status": "cached", "model": cached }).to_string();
-        }
-
-        match scanner::scan(path) {
+        match scan_component_into_cached_model(&root_dir) {
             Ok(model) => {
-                if let Err(e) = cache::set(&root_dir, &model) {
-                    tracing::warn!("Failed to cache arch model: {}", e);
-                }
                 info!(
-                    "scan_project: complete — style={}, layers={:?}",
-                    model.style, model.layer_order
+                    "scan_project: complete — components={}, style={}, layers={:?}",
+                    model.components.len(),
+                    model.style_summary(),
+                    model.layer_order_summary()
                 );
                 json!({ "status": "ok", "model": model }).to_string()
             }
@@ -270,14 +263,32 @@ impl MeridianServer {
     }
 }
 
-fn load_or_scan_model(root_dir: &str) -> Result<scanner::ArchModel> {
+fn load_or_scan_model(root_dir: &str) -> Result<scanner::ArchitectureModel> {
     if let Some(model) = cache::get(root_dir)? {
         return Ok(model);
     }
 
     let path = std::path::Path::new(root_dir);
-    let model = scanner::scan(path)
-        .with_context(|| format!("could not build arch model for: {root_dir}"))?;
+    let component = scanner::scan(path)
+        .with_context(|| format!("could not scan architecture component for: {root_dir}"))?;
+
+    let model = scanner::ArchitectureModel::from_component(component);
+
+    cache::set(root_dir, &model)
+        .with_context(|| format!("failed to cache architecture model for: {root_dir}"))?;
+
+    Ok(model)
+}
+
+fn scan_component_into_cached_model(root_dir: &str) -> Result<scanner::ArchitectureModel> {
+    let path = std::path::Path::new(root_dir);
+    let component = scanner::scan(path)
+        .with_context(|| format!("failed to scan architecture component for: {root_dir}"))?;
+
+    let mut model = cache::get(root_dir)?
+        .unwrap_or_else(|| scanner::ArchitectureModel::new(Some(root_dir.to_string())));
+
+    model.add_component(component);
 
     cache::set(root_dir, &model)
         .with_context(|| format!("failed to cache architecture model for: {root_dir}"))?;
@@ -405,7 +416,7 @@ fn cli_scan(roots: &[String]) -> Result<()> {
     }
 
     let any_missing_adrs = scanned.iter().any(|entry| {
-        entry["model"]["adrs"]
+        entry["model"]["global_observations"]["adrs"]
             .as_array()
             .is_some_and(|adrs| adrs.is_empty())
     });
@@ -434,19 +445,8 @@ fn cli_scan_one(root: &str) -> Result<serde_json::Value> {
         anyhow::bail!("not a directory: {root}");
     }
 
-    if let Some(model) = cache::get(root)? {
-        return Ok(json!({
-            "status": "cached",
-            "root": root,
-            "model": model
-        }));
-    }
-
-    let model =
-        scanner::scan(path).with_context(|| format!("failed to scan source root: {root}"))?;
-
-    cache::set(root, &model)
-        .with_context(|| format!("failed to cache architecture model for: {root}"))?;
+    let model = scan_component_into_cached_model(root)
+        .with_context(|| format!("failed to scan source root: {root}"))?;
 
     Ok(json!({
         "status": "ok",
@@ -604,7 +604,7 @@ fn cli_review_guidance(file_path: &str) -> Result<()> {
     Ok(())
 }
 
-fn prepare_cli_review(file_path: &str) -> Result<(scanner::ArchModel, String)> {
+fn prepare_cli_review(file_path: &str) -> Result<(scanner::ArchitectureModel, String)> {
     let file = PathBuf::from(file_path);
 
     if !file.exists() {
@@ -625,8 +625,9 @@ fn prepare_cli_review(file_path: &str) -> Result<(scanner::ArchModel, String)> {
     let model = match cache::get(&root_str)? {
         Some(model) => model,
         None => {
-            let model = scanner::scan(&root)
+            let component = scanner::scan(&root)
                 .with_context(|| format!("failed to scan project: {}", root.display()))?;
+            let model = scanner::ArchitectureModel::from_component(component);
             cache::set(&root_str, &model)?;
             model
         }

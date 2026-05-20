@@ -1,4 +1,4 @@
-use crate::scanner::ArchModel;
+use crate::scanner::ArchitectureModel;
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -57,75 +57,67 @@ impl Session {
 // ── Finding — matches Java backend JSON schema exactly ───────────────────────
 #[derive(Serialize)]
 struct ContentEnrichmentRequest {
-    #[serde(rename = "request_id")]
+    #[serde(rename = "requestId")]
     request_id: Uuid,
     context: ArchitectureContext,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArchitectureContext {
-    #[serde(rename = "context_id")]
     pub context_id: Option<Uuid>,
-    #[serde(rename = "organization_context")]
     pub organization_context: Option<serde_json::Value>,
-    #[serde(rename = "business_goals")]
     pub business_goals: Option<Vec<String>>,
     pub stakeholders: Option<Vec<serde_json::Value>>,
     pub decisions: Option<Vec<serde_json::Value>>,
     pub constraints: Option<Vec<String>>,
     pub risks: Option<Vec<String>>,
     pub standards: Option<Vec<String>>,
-    #[serde(rename = "scope_notes")]
     pub scope_notes: Option<Vec<String>>,
-    #[serde(rename = "freeform_notes")]
     pub freeform_notes: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ContextResponse {
-    #[serde(rename = "contextId")]
     pub context_id: Uuid,
-    #[serde(rename = "contextPercentUsed")]
     pub context_percent_used: serde_json::Value,
     pub message: String,
 }
 
 #[derive(Serialize)]
-struct MultipleReviewRequest {
-    #[serde(rename = "request_id")]
+#[serde(rename_all = "camelCase")]
+struct ArchitectureReviewRequest {
     request_id: Uuid,
-    #[serde(rename = "context_id")]
     context_id: Uuid,
-    documents: Vec<DocumentInput>,
+    review_mode: ReviewMode,
+    review_purpose: ReviewPurpose,
     options: ReviewOptions,
+    documents: Vec<DocumentInput>,
+    architecture_model: ArchitectureModel,
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DocumentInput {
     id: String,
     title: String,
     filename: String,
-    #[serde(rename = "type_hint")]
     type_hint: DocumentTypeHint,
     author: Option<String>,
     date: Option<String>,
     version: Option<String>,
-    #[serde(rename = "stated_scope")]
     stated_scope: Option<String>,
-    #[serde(rename = "organization_context")]
     organization_context: Option<serde_json::Value>,
-    #[serde(rename = "known_stakeholders")]
     known_stakeholders: Vec<serde_json::Value>,
-    #[serde(rename = "known_decisions")]
     known_decisions: Vec<serde_json::Value>,
     content: Vec<DocumentContent>,
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DocumentContent {
-    #[serde(rename = "content_type")]
     content_type: ContentType,
-    #[serde(rename = "media_type")]
     media_type: String,
     encoding: ContentEncoding,
     data: String,
@@ -168,17 +160,17 @@ enum ContentEncoding {
 
 #[derive(Serialize)]
 struct ReviewOptions {
-    #[serde(rename = "infer_stakeholders")]
+    #[serde(rename = "inferStakeholders")]
     infer_stakeholders: bool,
-    #[serde(rename = "infer_architectural_decisions")]
+    #[serde(rename = "inferArchitecturalDecisions")]
     infer_architectural_decisions: bool,
-    #[serde(rename = "include_quality_attribute_ranking")]
+    #[serde(rename = "includeQualityAttributeRanking")]
     include_quality_attribute_ranking: bool,
-    #[serde(rename = "domains_to_review")]
+    #[serde(rename = "domainsToReview")]
     domains_to_review: Vec<Domain>,
-    #[serde(rename = "minimum_confidence_threshold")]
+    #[serde(rename = "minimumConfidenceThreshold")]
     minimum_confidence_threshold: f64,
-    #[serde(rename = "minimum_gap_severity")]
+    #[serde(rename = "minimumGapSeverity")]
     minimum_gap_severity: GapSeverity,
 }
 
@@ -228,58 +220,40 @@ enum GapSeverity {
     High,
 }
 
-fn build_multiple_review_request(
-    model: &ArchModel,
+fn build_architecture_review_request(
+    model: &ArchitectureModel,
     file_path: &str,
     content: &str,
+    review_mode: ReviewMode,
+    review_purpose: ReviewPurpose,
     options: ReviewOptions,
-) -> MultipleReviewRequest {
-    let arch_model_json = serde_json::to_string_pretty(model).unwrap_or_else(|_| "{}".to_string());
-
-    MultipleReviewRequest {
+) -> ArchitectureReviewRequest {
+    ArchitectureReviewRequest {
         request_id: Uuid::new_v4(),
         context_id: Uuid::new_v4(),
-        documents: vec![
-            DocumentInput {
-                id: "architecture-model".to_string(),
-                title: "Architecture model".to_string(),
-                filename: "architecture-model.json".to_string(),
-                type_hint: DocumentTypeHint::ApplicationDesign,
-                author: None,
-                date: None,
-                version: None,
-                stated_scope: Some("Locally scanned Meridian architecture model".to_string()),
-                organization_context: None,
-                known_stakeholders: Vec::new(),
-                known_decisions: Vec::new(),
-                content: vec![DocumentContent {
-                    content_type: ContentType::Text,
-                    media_type: "application/json".to_string(),
-                    encoding: ContentEncoding::Utf8,
-                    data: arch_model_json,
-                }],
-            },
-            DocumentInput {
-                id: file_path.to_string(),
-                title: file_path.to_string(),
-                filename: file_path.to_string(),
-                type_hint: DocumentTypeHint::Codebase,
-                author: None,
-                date: None,
-                version: None,
-                stated_scope: Some("Source file submitted for architecture review".to_string()),
-                organization_context: None,
-                known_stakeholders: Vec::new(),
-                known_decisions: Vec::new(),
-                content: vec![DocumentContent {
-                    content_type: ContentType::Code,
-                    media_type: "text/plain".to_string(),
-                    encoding: ContentEncoding::Utf8,
-                    data: content.to_string(),
-                }],
-            },
-        ],
+        review_mode,
+        review_purpose,
         options,
+        architecture_model: model.clone(),
+        documents: vec![DocumentInput {
+            id: file_path.to_string(),
+            title: file_path.to_string(),
+            filename: file_path.to_string(),
+            type_hint: DocumentTypeHint::Codebase,
+            author: None,
+            date: None,
+            version: None,
+            stated_scope: Some("Source file submitted for architecture review".to_string()),
+            organization_context: None,
+            known_stakeholders: Vec::new(),
+            known_decisions: Vec::new(),
+            content: vec![DocumentContent {
+                content_type: ContentType::Code,
+                media_type: "text/plain".to_string(),
+                encoding: ContentEncoding::Utf8,
+                data: content.to_string(),
+            }],
+        }],
     }
 }
 
@@ -327,6 +301,28 @@ pub struct DomainEstimate {
     pub complexity_modifier: ComplexityModifier,
     pub estimated_price: u64,
     pub rationale: String,
+    pub confidence: f64,
+    pub sufficient_for_high_fidelity_review: bool,
+    pub supporting_evidence: Vec<String>,
+    pub missing_context: Vec<String>,
+    pub warnings: Vec<String>,
+    pub review_targets: Vec<ReviewTargetEstimate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewTargetEstimate {
+    pub target_id: String,
+    pub target_name: String,
+    pub domain: Domain,
+    pub target_type: String,
+    pub complexity_modifier: ComplexityModifier,
+    pub estimated_price: u64,
+    pub confidence: f64,
+    pub sufficient_for_high_fidelity_review: bool,
+    pub supporting_evidence: Vec<String>,
+    pub missing_context: Vec<String>,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -398,6 +394,20 @@ struct AuthNRequest {
     phone: Option<String>,
     email: Option<String>,
     password: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum ReviewMode {
+    Single,
+    Multiple,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum ReviewPurpose {
+    Full,
+    Intermediate,
 }
 
 async fn session_id(api_key: &str, backend_url: &str) -> Result<String> {
@@ -558,7 +568,7 @@ async fn invalidate_session() {
 async fn send_backend_request(
     url: &str,
     session_id: &str,
-    body: &MultipleReviewRequest,
+    body: &ArchitectureReviewRequest,
 ) -> Result<reqwest::Response> {
     http()
         .post(url)
@@ -601,7 +611,10 @@ async fn post_context(body: &ContentEnrichmentRequest) -> Result<reqwest::Respon
     Ok(response)
 }
 
-async fn post_review_stage(path: &str, body: &MultipleReviewRequest) -> Result<reqwest::Response> {
+async fn post_review_stage(
+    path: &str,
+    body: &ArchitectureReviewRequest,
+) -> Result<reqwest::Response> {
     let api_key = crate::config::api_key()?;
     let backend_url = crate::config::backend_url()?;
 
@@ -739,12 +752,18 @@ pub async fn add_context(context: ArchitectureContext) -> Result<ContextResponse
 ///
 /// This must be called before requesting a full review.
 pub async fn build_full_review_prompt(
-    model: &ArchModel,
+    model: &ArchitectureModel,
     file_path: &str,
     content: &str,
 ) -> Result<DomainSelectionPrompt> {
-    let body =
-        build_multiple_review_request(model, file_path, content, ReviewOptions::default_options());
+    let body = build_architecture_review_request(
+        model,
+        file_path,
+        content,
+        ReviewMode::Multiple,
+        ReviewPurpose::Full,
+        ReviewOptions::default_options(),
+    );
     let response = post_review_stage(FULL_REVIEW_PROMPT_PATH, &body).await?;
     parse_prompt_response(response).await
 }
@@ -753,12 +772,18 @@ pub async fn build_full_review_prompt(
 ///
 /// This must be called after the full-review prompt stage.
 pub async fn run_full_review(
-    model: &ArchModel,
+    model: &ArchitectureModel,
     file_path: &str,
     content: &str,
 ) -> Result<Vec<Finding>> {
-    let body =
-        build_multiple_review_request(model, file_path, content, ReviewOptions::default_options());
+    let body = build_architecture_review_request(
+        model,
+        file_path,
+        content,
+        ReviewMode::Multiple,
+        ReviewPurpose::Full,
+        ReviewOptions::default_options(),
+    );
     let response = post_review_stage(FULL_REVIEW_PATH, &body).await?;
     parse_review_response(response).await
 }
@@ -767,14 +792,16 @@ pub async fn run_full_review(
 ///
 /// This must be called only after the full review stage has completed.
 pub async fn run_intermediate_review(
-    model: &ArchModel,
+    model: &ArchitectureModel,
     file_path: &str,
     content: &str,
 ) -> Result<Vec<Finding>> {
-    let body = build_multiple_review_request(
+    let body = build_architecture_review_request(
         model,
         file_path,
         content,
+        ReviewMode::Single,
+        ReviewPurpose::Intermediate,
         ReviewOptions::intermediate_options(),
     );
     let response = post_review_stage(INTERMEDIATE_REVIEW_PATH, &body).await?;

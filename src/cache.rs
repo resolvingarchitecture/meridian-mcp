@@ -1,4 +1,4 @@
-use crate::scanner::ArchModel;
+use crate::scanner::ArchitectureModel;
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 use sled::Db;
@@ -17,14 +17,14 @@ fn db() -> Result<&'static Db> {
     Ok(db)
 }
 
-/// Retrieve a cached ArchModel for the given project root.
+/// Retrieve a cached ArchitectureModel for the given project root.
 /// Returns None if not cached or if the cache entry is stale.
-pub fn get(root: &str) -> Result<Option<ArchModel>> {
+pub fn get(root: &str) -> Result<Option<ArchitectureModel>> {
     let key = cache_key(root)?;
     match db()?.get(&key)? {
         None => Ok(None),
         Some(bytes) => {
-            let model: ArchModel = serde_json::from_slice(&bytes)?;
+            let model: ArchitectureModel = serde_json::from_slice(&bytes)?;
 
             // Invalidate if older than 30 minutes
             let now = std::time::SystemTime::now()
@@ -42,8 +42,8 @@ pub fn get(root: &str) -> Result<Option<ArchModel>> {
     }
 }
 
-/// Store an ArchModel in the cache.
-pub fn set(root: &str, model: &ArchModel) -> Result<()> {
+/// Store an ArchitectureModel in the cache.
+pub fn set(root: &str, model: &ArchitectureModel) -> Result<()> {
     let key = cache_key(root)?;
     let bytes = serde_json::to_vec(model)?;
     db()?.insert(key, bytes)?;
