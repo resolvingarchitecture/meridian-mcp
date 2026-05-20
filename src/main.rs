@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use tracing::info;
+use uuid::Uuid;
 
 mod agent;
 mod cache;
@@ -70,8 +71,16 @@ impl MeridianServer {
     async fn add_context(&self, Parameters(req): Parameters<AddContextRequest>) -> String {
         info!("add_context");
 
+        let context_id = match resolve_context_id_for_current_model(req.context_id) {
+            Ok(context_id) => context_id,
+            Err(e) => {
+                tracing::error!("add_context failed resolving context_id: {}", e);
+                return json!({ "error": e.to_string() }).to_string();
+            }
+        };
+
         let context = agent::ArchitectureContext {
-            context_id: req.context_id,
+            context_id: Some(context_id),
             organization_context: req.organization_context,
             business_goals: req.business_goals,
             stakeholders: req.stakeholders,
@@ -294,6 +303,34 @@ fn scan_component_into_cached_model(root_dir: &str) -> Result<scanner::Architect
         .with_context(|| format!("failed to cache architecture model for: {root_dir}"))?;
 
     Ok(model)
+}
+
+fn resolve_context_id_for_current_model(requested_context_id: Option<Uuid>) -> Result<Uuid> {
+    let root = std::env::current_dir().context("failed to determine current directory")?;
+    let root_str = root.to_string_lossy().to_string();
+
+    let context_id = match cache::get(&root_str)? {
+        Some(mut model) => match model.context_id.as_deref() {
+            Some(existing_context_id) => {
+                Uuid::parse_str(existing_context_id).with_context(|| {
+                    format!(
+                        "cached architecture model has invalid context_id: {existing_context_id}"
+                    )
+                })?
+            }
+            None => {
+                let context_id = requested_context_id.unwrap_or_else(Uuid::new_v4);
+                model.context_id = Some(context_id.to_string());
+                cache::set(&root_str, &model).with_context(|| {
+                    format!("failed to cache context_id for architecture model: {root_str}")
+                })?;
+                context_id
+            }
+        },
+        None => requested_context_id.unwrap_or_else(Uuid::new_v4),
+    };
+
+    Ok(context_id)
 }
 
 impl ServerHandler for MeridianServer {
@@ -742,8 +779,10 @@ async fn cli_context_add(file_path: &str) -> Result<()> {
     let content = std::fs::read_to_string(file_path)
         .with_context(|| format!("failed to read context file: {file_path}"))?;
 
-    let context: agent::ArchitectureContext = serde_json::from_str(&content)
+    let mut context: agent::ArchitectureContext = serde_json::from_str(&content)
         .with_context(|| format!("failed to parse context JSON: {file_path}"))?;
+
+    context.context_id = Some(resolve_context_id_for_current_model(context.context_id)?);
 
     let response = agent::add_context(context).await?;
 
