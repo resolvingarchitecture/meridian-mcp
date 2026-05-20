@@ -50,7 +50,7 @@ pub fn get_layer(path: &std::path::Path, layers: &[String]) -> Option<String> {
 /// Sample up to `limit` source files for pattern detection.
 /// Prefers files in known layer directories.
 pub fn sample_source_files(paths: &[PathBuf], limit: usize) -> Vec<PathBuf> {
-    let source_extensions = ["ts", "tsx", "js", "jsx", "java", "py", "go", "rs"];
+    let source_extensions = ["ts", "tsx", "js", "jsx", "java", "kt", "cs", "rb", "php", "cpp", "c", "h", "swift", "scala", "clj", "cljs", "cljc", "py", "go", "rs"];
     paths
         .iter()
         .filter(|p| {
