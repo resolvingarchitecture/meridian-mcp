@@ -318,6 +318,12 @@ async fn run_cli(args: Vec<String>) -> Result<()> {
             };
             cli_scan(&roots)
         }
+        Some("components") => match args.get(2).map(String::as_str) {
+            Some("list") => cli_components_list(),
+            _ => {
+                anyhow::bail!("usage: meridian components list");
+            }
+        },
         Some("review") => match args.get(2).map(String::as_str) {
             Some("prompt") => {
                 let file_path = args
@@ -453,6 +459,36 @@ fn cli_scan_one(root: &str) -> Result<serde_json::Value> {
         "root": root,
         "model": model
     }))
+}
+
+fn cli_components_list() -> Result<()> {
+    let root = std::env::current_dir().context("failed to determine current directory")?;
+    let root_str = root.to_string_lossy().to_string();
+
+    let model = match cache::get(&root_str)? {
+        Some(model) => model,
+        None => {
+            let component = scanner::scan(&root)
+                .with_context(|| format!("failed to scan project: {}", root.display()))?;
+            let model = scanner::ArchitectureModel::from_component(component);
+            cache::set(&root_str, &model)
+                .with_context(|| format!("failed to cache architecture model for: {root_str}"))?;
+            model
+        }
+    };
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "components": model
+                .components
+                .iter()
+                .map(|component| component.name.as_str())
+                .collect::<Vec<_>>()
+        }))?
+    );
+
+    Ok(())
 }
 
 fn multi_source_scan_workflow_guidance(any_missing_adrs: bool) -> serde_json::Value {
@@ -839,6 +875,7 @@ fn print_help() {
 Usage:
   meridian mcp
   meridian scan [root_dir...]
+  meridian components list
   meridian context template
   meridian context add <json_file>
   meridian review <file_path>
