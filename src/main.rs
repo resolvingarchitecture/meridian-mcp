@@ -1,3 +1,4 @@
+// Orchestrator
 use anyhow::{Context, Result};
 use rmcp::{handler::server::tool::Parameters, model::ServerInfo, schemars, tool, ServerHandler};
 use serde::Deserialize;
@@ -5,62 +6,22 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 use tracing::info;
 use uuid::Uuid;
+use crate::models::{
+    AddContextRequest, ArchitectureModel, ArchitectureContext, CachedArchitectureReviewRequest, ContentType,
+    DocumentInput, FullReviewEstimatesRequest, FullReviewRequest, IntermediateReviewRequest, InvalidateCacheRequest,
+    ReviewMode, ReviewOptions, ReviewPurpose, ScanProjectRequest,
+};
 
 mod agent;
 mod cache;
 mod config;
+mod models;
 mod scanner;
 
 // ── MCP Server ────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 struct MeridianServer;
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct AddContextRequest {
-    #[schemars(with = "Option<String>")]
-    context_id: Option<uuid::Uuid>,
-    organization_context: Option<serde_json::Value>,
-    business_goals: Option<Vec<String>>,
-    stakeholders: Option<Vec<serde_json::Value>>,
-    decisions: Option<Vec<serde_json::Value>>,
-    constraints: Option<Vec<String>>,
-    risks: Option<Vec<String>>,
-    standards: Option<Vec<String>>,
-    scope_notes: Option<Vec<String>>,
-    freeform_notes: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct ScanProjectRequest {
-    root_dir: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct FullReviewPromptRequest {
-    root_dir: String,
-    file_path: String,
-    content: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct FullReviewRequest {
-    root_dir: String,
-    file_path: String,
-    content: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct IntermediateReviewRequest {
-    root_dir: String,
-    file_path: String,
-    content: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct InvalidateCacheRequest {
-    root_dir: String,
-}
 
 #[tool(tool_box)]
 impl MeridianServer {
@@ -79,7 +40,7 @@ impl MeridianServer {
             }
         };
 
-        let context = agent::ArchitectureContext {
+        let context = ArchitectureContext {
             context_id: Some(context_id),
             organization_context: req.organization_context,
             business_goals: req.business_goals,
@@ -110,8 +71,8 @@ impl MeridianServer {
     }
 
     #[tool(
-        description = "Scan a Meridian project directory and build its architecture model. \
-        Call this once when opening a project. The model is cached automatically."
+        description = "Scan a Meridian project directory and populate the cached architecture review request with discovered documents. \
+        Call this once when opening a project. The request template is cached automatically."
     )]
     async fn scan_project(&self, Parameters(req): Parameters<ScanProjectRequest>) -> String {
         let root_dir = req.root_dir;
@@ -122,15 +83,19 @@ impl MeridianServer {
             return json!({ "error": format!("directory not found: {root_dir}") }).to_string();
         }
 
-        match scan_component_into_cached_model(&root_dir) {
-            Ok(model) => {
+        match scan_into_cached_request(&root_dir) {
+            Ok(cached) => {
                 info!(
-                    "scan_project: complete — components={}, style={}, layers={:?}",
-                    model.components.len(),
-                    model.style_summary(),
-                    model.layer_order_summary()
+                    "scan_project: complete — documents={}",
+                    cached.request.documents.len()
                 );
-                json!({ "status": "ok", "model": model }).to_string()
+                json!({
+                    "status": "ok",
+                    "context_id": cached.request.context_id,
+                    "document_count": cached.request.documents.len(),
+                    "documents": cached.request.documents
+                })
+                .to_string()
             }
             Err(e) => {
                 tracing::error!("scan_project failed: {}", e);
@@ -140,29 +105,32 @@ impl MeridianServer {
     }
 
     #[tool(
-        description = "Stage 1 of the review workflow. Build the full-review prompt. \
+        description = "Stage 1 of the review workflow. Build the full-review estimates. \
             This must be called before run_full_review."
     )]
-    async fn build_full_review_prompt(
+    async fn build_full_review_estimates(
         &self,
-        Parameters(req): Parameters<FullReviewPromptRequest>,
+        Parameters(req): Parameters<FullReviewEstimatesRequest>,
     ) -> String {
-        let root_dir = req.root_dir;
-        let file_path = req.file_path;
-        let content = req.content;
+        info!("build_full_review_estimates");
 
-        info!("build_full_review_prompt: {}", file_path);
-
-        let model = match load_or_scan_model(&root_dir) {
-            Ok(model) => model,
+        let cached = match load_cached_request() {
+            Ok(cached) => cached,
             Err(e) => {
                 return json!({ "error": e.to_string() }).to_string();
             }
         };
 
-        match agent::build_full_review_prompt(&model, &file_path, &content).await {
+        let request = cached.request_for_review(
+            ReviewMode::Multiple,
+            ReviewPurpose::Full,
+            ReviewOptions::full_review(),
+            None,
+        );
+
+        match agent::build_full_review_estimates(&request).await {
             Ok(prompt) => {
-                info!("build_full_review_prompt: complete for {}", file_path);
+                info!("build_full_review_estimates: complete");
                 json!({
                     "context_id": prompt.context_id,
                     "status": prompt.status,
@@ -182,35 +150,34 @@ impl MeridianServer {
                 }).to_string()
             }
             Err(e) => {
-                tracing::error!("build_full_review_prompt failed: {}", e);
+                tracing::error!("build_full_review_estimates failed: {}", e);
                 json!({ "error": e.to_string() }).to_string()
             }
         }
     }
 
     #[tool(description = "Stage 2 of the review workflow. Run the full review. \
-        This must be called after build_full_review_prompt and before run_intermediate_review.")]
+        This must be called after build_full_review_estimates and before run_intermediate_review.")]
     async fn run_full_review(&self, Parameters(req): Parameters<FullReviewRequest>) -> String {
-        let root_dir = req.root_dir;
-        let file_path = req.file_path;
-        let content = req.content;
+        info!("run_full_review");
 
-        info!("run_full_review: {}", file_path);
-
-        let model = match load_or_scan_model(&root_dir) {
-            Ok(model) => model,
+        let cached = match load_or_scan_request() {
+            Ok(cached) => cached,
             Err(e) => {
                 return json!({ "error": e.to_string() }).to_string();
             }
         };
 
-        match agent::run_full_review(&model, &file_path, &content).await {
+        let request = cached.request_for_review(
+            ReviewMode::Multiple,
+            ReviewPurpose::Full,
+            ReviewOptions::full_review(),
+            None,
+        );
+
+        match agent::run_full_review(&request).await {
             Ok(findings) => {
-                info!(
-                    "run_full_review: {} finding(s) for {}",
-                    findings.len(),
-                    file_path
-                );
+                info!("run_full_review: {} finding(s)", findings.len());
                 json!({ "findings": findings }).to_string()
             }
             Err(e) => {
@@ -228,20 +195,27 @@ impl MeridianServer {
         &self,
         Parameters(req): Parameters<IntermediateReviewRequest>,
     ) -> String {
-        let root_dir = req.root_dir;
         let file_path = req.file_path;
         let content = req.content;
 
         info!("run_intermediate_review: {}", file_path);
 
-        let model = match load_or_scan_model(&root_dir) {
-            Ok(model) => model,
+        let cached = match load_or_scan_request() {
+            Ok(cached) => cached,
             Err(e) => {
                 return json!({ "error": e.to_string() }).to_string();
             }
         };
 
-        match agent::run_intermediate_review(&model, &file_path, &content).await {
+        let reviewed_document = reviewed_file_document(&file_path, content);
+        let request = cached.request_for_review(
+            ReviewMode::Single,
+            ReviewPurpose::Intermediate,
+            ReviewOptions::intermediate_review(),
+            Some(reviewed_document),
+        );
+
+        match agent::run_intermediate_review(&request).await {
             Ok(findings) => {
                 info!(
                     "run_intermediate_review: {} finding(s) for {}",
@@ -259,78 +233,79 @@ impl MeridianServer {
 
     #[tool(description = "Clear the cached architecture model for a project. \
         Use this after major refactors to force a fresh scan.")]
-    async fn invalidate_cache(
-        &self,
-        Parameters(req): Parameters<InvalidateCacheRequest>,
-    ) -> String {
-        let root_dir = req.root_dir;
-
-        match cache::invalidate(&root_dir) {
-            Ok(_) => json!({ "status": "cache cleared", "root": root_dir }).to_string(),
+    async fn invalidate_cache(&self) -> String {
+        match cache::invalidate() {
+            Ok(_) => json!({ "status": "cache cleared" }).to_string(),
             Err(e) => json!({ "error": e.to_string() }).to_string(),
         }
     }
 }
 
-fn load_or_scan_model(root_dir: &str) -> Result<scanner::ArchitectureModel> {
-    if let Some(model) = cache::get(root_dir)? {
-        return Ok(model);
+fn load_cached_request() -> Result<CachedArchitectureReviewRequest> {
+    match cache::get()? {
+        Some(cached) => Ok(cached),
+        None => {
+            anyhow::bail!(
+                "no cached architecture review request found. Run scan_project(root_dir) first."
+            );
+        }
     }
-
-    let path = std::path::Path::new(root_dir);
-    let component = scanner::scan(path)
-        .with_context(|| format!("could not scan architecture component for: {root_dir}"))?;
-
-    let model = scanner::ArchitectureModel::from_component(component);
-
-    cache::set(root_dir, &model)
-        .with_context(|| format!("failed to cache architecture model for: {root_dir}"))?;
-
-    Ok(model)
 }
 
-fn scan_component_into_cached_model(root_dir: &str) -> Result<scanner::ArchitectureModel> {
+fn scan_into_cached_request(root_dir: &str) -> Result<CachedArchitectureReviewRequest> {
     let path = std::path::Path::new(root_dir);
-    let component = scanner::scan(path)
-        .with_context(|| format!("failed to scan architecture component for: {root_dir}"))?;
 
-    let mut model = cache::get(root_dir)?
-        .unwrap_or_else(|| scanner::ArchitectureModel::new(Some(root_dir.to_string())));
+    if !path.exists() {
+        anyhow::bail!("directory not found: {root_dir}");
+    }
 
-    model.add_component(component);
+    if !path.is_dir() {
+        anyhow::bail!("not a directory: {root_dir}");
+    }
 
-    cache::set(root_dir, &model)
-        .with_context(|| format!("failed to cache architecture model for: {root_dir}"))?;
+    let documents = scanner::scan(path)
+        .with_context(|| format!("failed to scan architecture documents for: {root_dir}"))?;
 
-    Ok(model)
+    let mut cached = cache::get()?
+        .unwrap_or_else(|| CachedArchitectureReviewRequest::new(Uuid::new_v4()));
+
+    cached.upsert_documents(documents);
+
+    cache::set(&cached).with_context(|| format!("failed to cache architecture review request"))?;
+
+    Ok(cached)
 }
 
 fn resolve_context_id_for_current_model(requested_context_id: Option<Uuid>) -> Result<Uuid> {
-    let root = std::env::current_dir().context("failed to determine current directory")?;
-    let root_str = root.to_string_lossy().to_string();
-
-    let context_id = match cache::get(&root_str)? {
-        Some(mut model) => match model.context_id.as_deref() {
-            Some(existing_context_id) => {
-                Uuid::parse_str(existing_context_id).with_context(|| {
-                    format!(
-                        "cached architecture model has invalid context_id: {existing_context_id}"
-                    )
-                })?
+    let context_id = match cache::get()? {
+        Some(mut cached) => {
+            let existing_context_id = cached.request.context_id;
+            if let Some(requested_context_id) = requested_context_id {
+                cached.request.context_id = requested_context_id;
+                cached.request.architecture_model.context_id = Some(requested_context_id);
+                cache::set(&cached)
+                    .with_context(|| format!("failed to cache context_id for review request"))?;
+                requested_context_id
+            } else {
+                existing_context_id
             }
-            None => {
-                let context_id = requested_context_id.unwrap_or_else(Uuid::new_v4);
-                model.context_id = Some(context_id.to_string());
-                cache::set(&root_str, &model).with_context(|| {
-                    format!("failed to cache context_id for architecture model: {root_str}")
-                })?;
-                context_id
-            }
-        },
+        }
         None => requested_context_id.unwrap_or_else(Uuid::new_v4),
     };
 
     Ok(context_id)
+}
+
+fn reviewed_file_document(file_path: &str, content: String) -> DocumentInput {
+    documents::new_document_input(
+        Path::new(file_path),
+        file_path.to_string(),
+        DocumentTypeHint::Codebase,
+        Some("Source file submitted for architecture review".to_string()),
+        ContentType::Code,
+        "text/plain",
+        content,
+    )
 }
 
 impl ServerHandler for MeridianServer {
@@ -362,11 +337,11 @@ async fn run_cli(args: Vec<String>) -> Result<()> {
             }
         },
         Some("review") => match args.get(2).map(String::as_str) {
-            Some("prompt") => {
+            Some("estimates") => {
                 let file_path = args
                     .get(3)
                     .context("usage: meridian review prompt <file_path>")?;
-                cli_review_prompt(file_path).await
+                cli_review_estimates(file_path).await
             }
             Some("full") => {
                 let file_path = args
@@ -499,28 +474,23 @@ fn cli_scan_one(root: &str) -> Result<serde_json::Value> {
 }
 
 fn cli_components_list() -> Result<()> {
-    let root = std::env::current_dir().context("failed to determine current directory")?;
-    let root_str = root.to_string_lossy().to_string();
-
-    let model = match cache::get(&root_str)? {
-        Some(model) => model,
-        None => {
-            let component = scanner::scan(&root)
-                .with_context(|| format!("failed to scan project: {}", root.display()))?;
-            let model = scanner::ArchitectureModel::from_component(component);
-            cache::set(&root_str, &model)
-                .with_context(|| format!("failed to cache architecture model for: {root_str}"))?;
-            model
-        }
-    };
+    let cached = load_cached_request()?;
 
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "components": model
+            "context_id": cached.request.context_id,
+            "components": cached
+                .request
+                .architecture_model
                 .components
                 .iter()
-                .map(|component| component.name.as_str())
+                .map(|component| {
+                    json!({
+                        "id": component.id,
+                        "name": component.name
+                    })
+                })
                 .collect::<Vec<_>>()
         }))?
     );
@@ -572,25 +542,25 @@ fn multi_source_scan_workflow_guidance(any_missing_adrs: bool) -> serde_json::Va
     }
 }
 
-async fn cli_review_prompt(file_path: &str) -> Result<()> {
+async fn cli_review_estimates(file_path: &str) -> Result<()> {
     let (model, content) = prepare_cli_review(file_path)?;
 
-    let prompt = agent::build_full_review_prompt(&model, file_path, &content).await?;
+    let resp = agent::build_full_review_estimates(&model, file_path, &content).await?;
 
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "context_id": prompt.context_id,
-            "status": prompt.status,
-            "question": prompt.question,
-            "domain_estimates": prompt.domain_estimates,
-            "sats_available": prompt.sats_available,
-            "total_estimated_price": prompt.total_estimated_price,
-            "requires_user_selection": prompt.requires_user_selection,
-            "present_estimated_price": prompt.present_estimated_price(),
-            "present_domains_exceed_available_balance": prompt.present_domains_exceed_available_balance(),
-            "selection_guidance": prompt.selection_guidance(),
-            "insufficient_balance_reminder": if prompt.present_domains_exceed_available_balance() {
+            "context_id": resp.context_id,
+            "status": resp.status,
+            "question": resp.question,
+            "domain_estimates": resp.domain_estimates,
+            "sats_available": resp.sats_available,
+            "total_estimated_price": resp.total_estimated_price,
+            "requires_user_selection": resp.requires_user_selection,
+            "present_estimated_price": resp.present_estimated_price(),
+            "present_domains_exceed_available_balance": resp.present_domains_exceed_available_balance(),
+            "selection_guidance": resp.selection_guidance(),
+            "insufficient_balance_reminder": if resp.present_domains_exceed_available_balance() {
                 Some("The currently present domains exceed sats_available. Choose fewer domains or add more funds before continuing.")
             } else {
                 None
@@ -677,7 +647,7 @@ fn cli_review_guidance(file_path: &str) -> Result<()> {
     Ok(())
 }
 
-fn prepare_cli_review(file_path: &str) -> Result<(scanner::ArchitectureModel, String)> {
+fn prepare_cli_review(file_path: &str) -> Result<(ArchitectureModel, String)> {
     let file = PathBuf::from(file_path);
 
     if !file.exists() {
@@ -693,15 +663,13 @@ fn prepare_cli_review(file_path: &str) -> Result<(scanner::ArchitectureModel, St
 
     let root = std::env::current_dir().context("failed to determine current directory")?;
 
-    let root_str = root.to_string_lossy().to_string();
-
-    let model = match cache::get(&root_str)? {
+    let model = match cache::get()? {
         Some(model) => model,
         None => {
             let component = scanner::scan(&root)
                 .with_context(|| format!("failed to scan project: {}", root.display()))?;
-            let model = scanner::ArchitectureModel::from_component(component);
-            cache::set(&root_str, &model)?;
+            let model = ArchitectureModel::from_component(component);
+            cache::set(&model)?;
             model
         }
     };
@@ -709,14 +677,13 @@ fn prepare_cli_review(file_path: &str) -> Result<(scanner::ArchitectureModel, St
     Ok((model, content))
 }
 
-fn cli_cache_clear(root: &str) -> Result<()> {
-    cache::invalidate(root).with_context(|| format!("failed to clear cache for: {root}"))?;
+fn cli_cache_clear() -> Result<()> {
+    cache::invalidate().with_context(|| format!("failed to clear cache"))?;
 
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "status": "cache cleared",
-            "root": root
+            "status": "cache cleared"
         }))?
     );
 
@@ -918,7 +885,7 @@ Usage:
   meridian context template
   meridian context add <json_file>
   meridian review <file_path>
-  meridian review prompt <file_path>
+  meridian review estimates <file_path>
   meridian review full <file_path>
   meridian review intermediate <file_path>
   meridian cache clear [root_dir]
@@ -931,49 +898,68 @@ Usage:
   meridian version
   meridian help
 
+Recommended Setup:
+    1. Login to Meridian site and create an api-key. Remember to copy it before leaving page as it can longer be restored. It starts with m_live_.
+    2. Set api-key in config:
+        meridian config set api-key m_live_restofkeyhere
+    3. Test backend access:
+        meridian test backend
+        If successful, returns: {{
+                                  "status": "UP",
+                                  "timestamp": "date-time-here"
+                                }}
+    4. Test backend authentication:
+        meridian login
+        If successful, returns: {{
+                                  "sessionId": "ID-here",
+                                  "expiresAt": 30-minutes-ahead-in-epoch-time-here,
+                                  "status": 200,
+                                  "message": "Login successful"
+                                }}
+
+
 Recommended review workflow:
-  1. Scan one or more architecture-significant source roots:
-       meridian scan [root_dir...]
+    1. Scan one or more architecture-significant source roots:
+        meridian scan [root_dir...]
 
-     Examples:
-       meridian scan .
-       meridian scan ../frontend ../backend ../infra ../architecture-docs
+        Examples:
+        meridian scan .
+        meridian scan ../frontend ../backend ../infra ../architecture-docs
 
-     Each root is scanned and cached independently. Architecture can span
+     Each root is scanned and cached into a single ArchitectureModel. Architecture can span
      multiple projects, repositories, infrastructure roots, API contracts,
      ADR folders, and architecture-document locations.
 
-  2. If no ADRs or architecture records are present in one or more sources:
+    2. If no ADRs or architecture records are present in one or more sources:
        meridian context template > meridian-context.json
        Edit meridian-context.json with stakeholders, stakeholder concerns,
        agreed decisions, constraints, risks, standards, scope notes, and
        non-functional requirements.
 
-  3. Add context to the Meridian backend:
+    3. Add context to the Meridian backend:
        meridian context add meridian-context.json
 
-  4. Prepare and run a full review:
-       meridian review prompt <file_path>
-       meridian review full <file_path>
+    4. Prepare and run a full review:
+       meridian review estimates
+       meridian review full
 
-  5. After a successful full review establishes a backend baseline:
+    5. After a successful full review establishes a backend baseline:
        meridian review intermediate <file_path>
 
 Notes:
-  meridian review <file_path>
-       Prints workflow guidance. It does not silently run intermediate review,
-       because intermediate review requires a successful prior full review.
+    meridian review
+       Prints workflow guidance.
 
-  Meridian preserves source-root identity locally. The backend decides how
-  scanned roots relate to a larger architecture context, review scope, and
-  full-review baseline.
+    Meridian preserves source-root identity locally. The backend decides how
+    scanned roots relate to a larger architecture context, review scope, and
+    full-review baseline.
 
-  Meridian recommends. The customer organization decides.
+    Meridian recommends. The customer organization decides.
 
 Environment:
-  MERIDIAN_API_KEY      API key, usually m_live_...
-  MERIDIAN_BACKEND_URL  Backend URL
-  MERIDIAN_LOG          Log level for stderr logs
+    MERIDIAN_API_KEY      API key, usually m_live_...
+    MERIDIAN_BACKEND_URL  Backend URL
+    MERIDIAN_LOG          Log level for stderr logs
 "#
     );
 }

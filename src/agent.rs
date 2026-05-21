@@ -1,4 +1,4 @@
-use crate::scanner::ArchitectureModel;
+// Transport Logic
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -6,6 +6,10 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use uuid::Uuid;
+use crate::models::{
+    ArchitectureContext, ArchitectureReviewEstimates, ArchitectureReviewRequest, AuthNResult,
+    ContextResponse, Finding, HealthHeartbeat,
+};
 
 static CLIENT: OnceLock<Client> = OnceLock::new();
 static SESSION: OnceLock<Arc<Mutex<Option<Session>>>> = OnceLock::new();
@@ -15,10 +19,47 @@ const SESSION_REFRESH: &str = "/api/security/session/refresh";
 const LOGOUT_PATH: &str = "/api/security/logout";
 const HEALTH_HEARTBEAT_PATH: &str = "/api/health/heartbeat";
 const CONTEXT_PATH: &str = "/api/context";
-const FULL_REVIEW_PROMPT_PATH: &str = "/api/skills/review/full/prompt";
+const FULL_REVIEW_ESTIMATES_PATH: &str = "/api/skills/review/full/estimate";
 const FULL_REVIEW_PATH: &str = "/api/skills/review/full";
 const INTERMEDIATE_REVIEW_PATH: &str = "/api/skills/review/intermediate";
 const SESSION_EXPIRY_SAFETY_MARGIN_MILLIS: u64 = 30_000;
+
+
+#[derive(Debug, Clone, Serialize)]
+struct AuthNRequest {
+    #[serde(rename = "rawKey")]
+    raw_key: String,
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
+    username: Option<String>,
+    phone: Option<String>,
+    email: Option<String>,
+    password: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ContentEnrichmentRequest {
+    #[serde(rename = "requestId")]
+    request_id: Uuid,
+    context: ArchitectureContext,
+}
+
+#[derive(Deserialize)]
+struct ReviewResponse {
+    findings: Vec<Finding>,
+}
+
+#[derive(Debug, Clone)]
+struct Session {
+    session_id: String,
+    expires_at: u64,
+}
+
+impl Session {
+    fn is_valid(&self) -> bool {
+        now_epoch_millis() + SESSION_EXPIRY_SAFETY_MARGIN_MILLIS < self.expires_at
+    }
+}
 
 fn http() -> &'static Client {
     CLIENT.get_or_init(|| {
@@ -40,374 +81,6 @@ fn now_epoch_millis() -> u64 {
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX)
-}
-
-#[derive(Debug, Clone)]
-struct Session {
-    session_id: String,
-    expires_at: u64,
-}
-
-impl Session {
-    fn is_valid(&self) -> bool {
-        now_epoch_millis() + SESSION_EXPIRY_SAFETY_MARGIN_MILLIS < self.expires_at
-    }
-}
-
-// ── Finding — matches Java backend JSON schema exactly ───────────────────────
-#[derive(Serialize)]
-struct ContentEnrichmentRequest {
-    #[serde(rename = "requestId")]
-    request_id: Uuid,
-    context: ArchitectureContext,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ArchitectureContext {
-    pub context_id: Option<Uuid>,
-    pub organization_context: Option<serde_json::Value>,
-    pub business_goals: Option<Vec<String>>,
-    pub stakeholders: Option<Vec<serde_json::Value>>,
-    pub decisions: Option<Vec<serde_json::Value>>,
-    pub constraints: Option<Vec<String>>,
-    pub risks: Option<Vec<String>>,
-    pub standards: Option<Vec<String>>,
-    pub scope_notes: Option<Vec<String>>,
-    pub freeform_notes: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContextResponse {
-    pub context_id: Uuid,
-    pub context_percent_used: serde_json::Value,
-    pub message: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ArchitectureReviewRequest {
-    request_id: Uuid,
-    context_id: Uuid,
-    review_mode: ReviewMode,
-    review_purpose: ReviewPurpose,
-    options: ReviewOptions,
-    documents: Vec<DocumentInput>,
-    architecture_model: ArchitectureModel,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DocumentInput {
-    id: String,
-    title: String,
-    filename: String,
-    type_hint: DocumentTypeHint,
-    author: Option<String>,
-    date: Option<String>,
-    version: Option<String>,
-    stated_scope: Option<String>,
-    organization_context: Option<serde_json::Value>,
-    known_stakeholders: Vec<serde_json::Value>,
-    known_decisions: Vec<serde_json::Value>,
-    content: Vec<DocumentContent>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DocumentContent {
-    content_type: ContentType,
-    media_type: String,
-    encoding: ContentEncoding,
-    data: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum DocumentTypeHint {
-    ApplicationDesign,
-    ArchitectureDecisionRecord,
-    IntegrationDesign,
-    DataModel,
-    InfrastructureDesign,
-    SecurityDesign,
-    ThreatModel,
-    EnterpriseRoadmap,
-    StandardsDocument,
-    Runbook,
-    Codebase,
-    Other,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum ContentType {
-    Text,
-    Base64Pdf,
-    Base64Img,
-    Url,
-    Code,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum ContentEncoding {
-    Plain,
-    Base64,
-    Utf8,
-}
-
-#[derive(Serialize)]
-struct ReviewOptions {
-    #[serde(rename = "inferStakeholders")]
-    infer_stakeholders: bool,
-    #[serde(rename = "inferArchitecturalDecisions")]
-    infer_architectural_decisions: bool,
-    #[serde(rename = "includeQualityAttributeRanking")]
-    include_quality_attribute_ranking: bool,
-    #[serde(rename = "domainsToReview")]
-    domains_to_review: Vec<Domain>,
-    #[serde(rename = "minimumConfidenceThreshold")]
-    minimum_confidence_threshold: f64,
-    #[serde(rename = "minimumGapSeverity")]
-    minimum_gap_severity: GapSeverity,
-}
-
-impl ReviewOptions {
-    fn default_options() -> Self {
-        Self {
-            infer_stakeholders: true,
-            infer_architectural_decisions: true,
-            include_quality_attribute_ranking: true,
-            domains_to_review: vec![
-                Domain::Application,
-                Domain::Integration,
-                Domain::Data,
-                Domain::Infrastructure,
-                Domain::Security,
-                Domain::Enterprise,
-            ],
-            minimum_confidence_threshold: 0.0,
-            minimum_gap_severity: GapSeverity::Low,
-        }
-    }
-
-    fn intermediate_options() -> Self {
-        Self {
-            infer_stakeholders: false,
-            infer_architectural_decisions: false,
-            include_quality_attribute_ranking: false,
-            domains_to_review: vec![
-                Domain::Application,
-                Domain::Integration,
-                Domain::Data,
-                Domain::Infrastructure,
-                Domain::Security,
-                Domain::Enterprise,
-            ],
-            minimum_confidence_threshold: 0.4,
-            minimum_gap_severity: GapSeverity::High,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum GapSeverity {
-    Low,
-    Medium,
-    High,
-}
-
-fn build_architecture_review_request(
-    model: &ArchitectureModel,
-    file_path: &str,
-    content: &str,
-    review_mode: ReviewMode,
-    review_purpose: ReviewPurpose,
-    options: ReviewOptions,
-) -> ArchitectureReviewRequest {
-    ArchitectureReviewRequest {
-        request_id: Uuid::new_v4(),
-        context_id: Uuid::new_v4(),
-        review_mode,
-        review_purpose,
-        options,
-        architecture_model: model.clone(),
-        documents: vec![DocumentInput {
-            id: file_path.to_string(),
-            title: file_path.to_string(),
-            filename: file_path.to_string(),
-            type_hint: DocumentTypeHint::Codebase,
-            author: None,
-            date: None,
-            version: None,
-            stated_scope: Some("Source file submitted for architecture review".to_string()),
-            organization_context: None,
-            known_stakeholders: Vec::new(),
-            known_decisions: Vec::new(),
-            content: vec![DocumentContent {
-                content_type: ContentType::Code,
-                media_type: "text/plain".to_string(),
-                encoding: ContentEncoding::Utf8,
-                data: content.to_string(),
-            }],
-        }],
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Finding {
-    pub severity: String,
-    #[serde(rename = "type")]
-    pub finding_type: String,
-    pub file: String,
-    pub line: Option<u32>,
-    pub title: String,
-    pub explanation: String,
-    pub consequence: String,
-    pub suggestion: String,
-    pub adr_reference: Option<String>,
-    pub confidence: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum Domain {
-    Application,
-    Integration,
-    Data,
-    Infrastructure,
-    Security,
-    Enterprise,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ComplexityModifier {
-    Simple,
-    Moderate,
-    Complex,
-    VeryComplex,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DomainEstimate {
-    pub domain: Domain,
-    pub present: bool,
-    pub estimated_components: i32,
-    pub complexity_modifier: ComplexityModifier,
-    pub estimated_price: u64,
-    pub rationale: String,
-    pub confidence: f64,
-    pub sufficient_for_high_fidelity_review: bool,
-    pub supporting_evidence: Vec<String>,
-    pub missing_context: Vec<String>,
-    pub warnings: Vec<String>,
-    pub review_targets: Vec<ReviewTargetEstimate>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReviewTargetEstimate {
-    pub target_id: String,
-    pub target_name: String,
-    pub domain: Domain,
-    pub target_type: String,
-    pub complexity_modifier: ComplexityModifier,
-    pub estimated_price: u64,
-    pub confidence: f64,
-    pub sufficient_for_high_fidelity_review: bool,
-    pub supporting_evidence: Vec<String>,
-    pub missing_context: Vec<String>,
-    pub warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DomainSelectionPrompt {
-    #[serde(rename = "context_id")]
-    pub context_id: String,
-    pub status: String,
-    pub question: String,
-    #[serde(rename = "domain_estimates")]
-    pub domain_estimates: Vec<DomainEstimate>,
-    #[serde(rename = "sats_available")]
-    pub sats_available: u64,
-    #[serde(rename = "total_estimated_price")]
-    pub total_estimated_price: u64,
-    #[serde(rename = "requires_user_selection")]
-    pub requires_user_selection: bool,
-}
-
-impl DomainSelectionPrompt {
-    pub fn present_estimated_price(&self) -> u64 {
-        self.domain_estimates
-            .iter()
-            .filter(|estimate| estimate.present)
-            .map(|estimate| estimate.estimated_price)
-            .sum()
-    }
-
-    pub fn selection_guidance(&self) -> Option<&'static str> {
-        if self.requires_user_selection {
-            Some("Present domain_estimates to the user. The selected domains' combined estimated_price must be less than or equal to sats_available. If the selection exceeds sats_available, ask the user to choose fewer domains or add more funds.")
-        } else {
-            None
-        }
-    }
-
-    pub fn present_domains_exceed_available_balance(&self) -> bool {
-        self.present_estimated_price() > self.sats_available
-    }
-}
-
-#[derive(Deserialize)]
-struct ReviewResponse {
-    findings: Vec<Finding>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HealthHeartbeat {
-    pub status: String,
-    pub timestamp: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthNResult {
-    #[serde(rename = "sessionId")]
-    pub session_id: String,
-    #[serde(rename = "expiresAt")]
-    pub expires_at: u64,
-    pub status: Option<i32>,
-    pub message: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct AuthNRequest {
-    #[serde(rename = "rawKey")]
-    raw_key: String,
-    #[serde(rename = "sessionId")]
-    session_id: Option<String>,
-    username: Option<String>,
-    phone: Option<String>,
-    email: Option<String>,
-    password: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum ReviewMode {
-    Single,
-    Multiple,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum ReviewPurpose {
-    Full,
-    Intermediate,
 }
 
 async fn session_id(api_key: &str, backend_url: &str) -> Result<String> {
@@ -657,7 +330,9 @@ async fn parse_review_response(response: reqwest::Response) -> Result<Vec<Findin
     }
 }
 
-async fn parse_prompt_response(response: reqwest::Response) -> Result<DomainSelectionPrompt> {
+async fn parse_estimates_response(
+    response: reqwest::Response,
+) -> Result<ArchitectureReviewEstimates> {
     match response.status() {
         s if s.is_success() => response
             .json()
@@ -751,59 +426,25 @@ pub async fn add_context(context: ArchitectureContext) -> Result<ContextResponse
 /// Stage 1: build the full-review prompt.
 ///
 /// This must be called before requesting a full review.
-pub async fn build_full_review_prompt(
-    model: &ArchitectureModel,
-    file_path: &str,
-    content: &str,
-) -> Result<DomainSelectionPrompt> {
-    let body = build_architecture_review_request(
-        model,
-        file_path,
-        content,
-        ReviewMode::Multiple,
-        ReviewPurpose::Full,
-        ReviewOptions::default_options(),
-    );
-    let response = post_review_stage(FULL_REVIEW_PROMPT_PATH, &body).await?;
-    parse_prompt_response(response).await
+pub async fn build_full_review_estimates(
+    request: &ArchitectureReviewRequest,
+) -> Result<ArchitectureReviewEstimates> {
+    let response = post_review_stage(FULL_REVIEW_ESTIMATES_PATH, request).await?;
+    parse_estimates_response(response).await
 }
 
 /// Stage 2: execute a full review.
 ///
 /// This must be called after the full-review prompt stage.
-pub async fn run_full_review(
-    model: &ArchitectureModel,
-    file_path: &str,
-    content: &str,
-) -> Result<Vec<Finding>> {
-    let body = build_architecture_review_request(
-        model,
-        file_path,
-        content,
-        ReviewMode::Multiple,
-        ReviewPurpose::Full,
-        ReviewOptions::default_options(),
-    );
-    let response = post_review_stage(FULL_REVIEW_PATH, &body).await?;
+pub async fn run_full_review(request: &ArchitectureReviewRequest) -> Result<Vec<Finding>> {
+    let response = post_review_stage(FULL_REVIEW_PATH, request).await?;
     parse_review_response(response).await
 }
 
 /// Stage 3: execute an intermediate review for a file change.
 ///
 /// This must be called only after the full review stage has completed.
-pub async fn run_intermediate_review(
-    model: &ArchitectureModel,
-    file_path: &str,
-    content: &str,
-) -> Result<Vec<Finding>> {
-    let body = build_architecture_review_request(
-        model,
-        file_path,
-        content,
-        ReviewMode::Single,
-        ReviewPurpose::Intermediate,
-        ReviewOptions::intermediate_options(),
-    );
-    let response = post_review_stage(INTERMEDIATE_REVIEW_PATH, &body).await?;
+pub async fn run_intermediate_review(request: &ArchitectureReviewRequest) -> Result<Vec<Finding>> {
+    let response = post_review_stage(INTERMEDIATE_REVIEW_PATH, request).await?;
     parse_review_response(response).await
 }

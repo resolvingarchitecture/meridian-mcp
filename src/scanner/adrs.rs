@@ -1,4 +1,6 @@
-use std::path::Path;
+use crate::models::{ContentType, DocumentInput, DocumentTypeHint};
+use crate::scanner:documents;
+use std::path::{Path, PathBuf};
 
 /// Known locations where teams store Architecture Decision Records.
 const ADR_DIRS: &[&str] = &[
@@ -10,119 +12,82 @@ const ADR_DIRS: &[&str] = &[
     ".adr",
 ];
 
-/// Known architecture documentation files.
-const ARCH_DOCS: &[&str] = &[
-    "ARCHITECTURE.md",
-    "architecture.md",
-    "DESIGN.md",
-    "design.md",
-];
+/// Harvest ADR documents from already-collected project paths.
+pub fn harvest_from_paths(paths: &[PathBuf]) -> Vec<DocumentInput> {
+    let mut adrs = Vec::new();
 
-/// Harvest ADR titles and statuses from the project.
-/// Reads only the first 8 lines of each file to stay lean.
-pub fn harvest(root: &Path) -> Vec<String> {
-    let mut adrs = vec![];
-
-    // Scan known ADR directories
-    for dir in ADR_DIRS {
-        let full = root.join(dir);
-        if !full.is_dir() {
-            continue;
-        }
-
-        if let Ok(entries) = std::fs::read_dir(&full) {
-            let mut files: Vec<_> = entries
-                .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.path()
-                        .extension()
-                        .and_then(|x| x.to_str())
-                        .map(|x| x == "md")
-                        .unwrap_or(false)
-                })
-                .collect();
-
-            // Sort for stable ordering
-            files.sort_by_key(|e| e.file_name());
-
-            for entry in files {
-                if let Some(summary) = summarise_adr(&entry.path()) {
-                    adrs.push(summary);
-                }
+    for path in paths {
+        if is_markdown_file(path) && is_adr_path(path) {
+            if let Some(document) = summarise_adr(path) {
+                adrs.push(document);
             }
         }
     }
 
-    // Also check root-level architecture docs
-    for doc in ARCH_DOCS {
-        let full = root.join(doc);
-        if full.exists() {
-            if let Some(summary) = summarise_doc(&full) {
-                adrs.push(summary);
-            }
-        }
-    }
+    adrs.sort_by(|a, b| a.filename.cmp(&b.filename));
 
-    // Fall back: scan for inline ARCH: or DECISION: comments in source
     if adrs.is_empty() {
-        adrs.extend(scan_inline_decisions(root));
+        adrs.extend(scan_inline_decisions_from_paths(paths));
     }
 
     adrs
 }
 
+pub fn is_adr_path(path: &Path) -> bool {
+    let path_text = path.to_string_lossy().replace('\\', "/");
+    ADR_DIRS
+        .iter()
+        .any(|known_dir| path_text.contains(known_dir))
+}
+
 /// Extract title and status from an ADR markdown file.
-/// Reads only first 8 lines — we want the title and status, not the full doc.
-fn summarise_adr(path: &Path) -> Option<String> {
+fn summarise_adr(path: &Path) -> Option<DocumentInput> {
     let content = std::fs::read_to_string(path).ok()?;
     let lines: Vec<&str> = content.lines().take(8).collect();
 
     // Extract title (first # heading)
     let title = lines
         .iter()
-        .find(|l| l.starts_with("# "))
-        .map(|l| l.trim_start_matches("# ").trim())
-        .unwrap_or("Untitled ADR");
+        .find(|line| line.starts_with("# "))
+        .map(|line| line.trim_start_matches("# ").trim().to_string())
+        .unwrap_or_else(|| "Untitled ADR".to_string());
 
     // Extract status if present
     let status = lines
         .iter()
-        .find(|l| {
-            let lower = l.to_lowercase();
+        .find(|line| {
+            let lower = line.to_lowercase();
             lower.contains("status:")
                 || lower.contains("accepted")
                 || lower.contains("proposed")
                 || lower.contains("deprecated")
         })
-        .map(|l| l.trim())
-        .unwrap_or("accepted"); // assume accepted if no status line
+        .map(|line| line.trim())
+        .unwrap_or("accepted");
 
     let filename = path.file_stem().and_then(|s| s.to_str()).unwrap_or("adr");
+    let summary = format!("{filename}: {title} ({status})");
 
-    Some(format!("{filename}: {title} ({status})"))
-}
-
-fn summarise_doc(path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let first_heading = content
-        .lines()
-        .find(|l| l.starts_with("# "))
-        .map(|l| l.trim_start_matches("# ").trim().to_string())?;
-
-    let filename = path.file_name()?.to_str()?;
-    Some(format!("{filename}: {first_heading}"))
+    Some(documents::new_document_input(
+        path,
+        title,
+        DocumentTypeHint::ArchitectureDecisionRecord,
+        Some(summary),
+        ContentType::Text,
+        "text/plain",
+        content,
+    ))
 }
 
 /// Last resort: find ARCH: or DECISION: comments inline in source files.
-fn scan_inline_decisions(root: &Path) -> Vec<String> {
-    let mut decisions = vec![];
-    let walker = ignore::WalkBuilder::new(root).git_ignore(true).build();
+fn scan_inline_decisions_from_paths(paths: &[PathBuf]) -> Vec<DocumentInput> {
+    let mut decisions = Vec::new();
 
-    for entry in walker.filter_map(|e| e.ok()) {
-        let path = entry.path();
+    for path in paths {
         if !is_source_file(path) {
             continue;
         }
+
         if let Ok(content) = std::fs::read_to_string(path) {
             for line in content.lines() {
                 let trimmed = line.trim();
@@ -133,7 +98,17 @@ fn scan_inline_decisions(root: &Path) -> Vec<String> {
                         .trim_start_matches("#")
                         .trim()
                         .to_string();
-                    decisions.push(decision);
+
+                    decisions.push(documents::new_document_input(
+                        path,
+                        "Inline architecture decision".to_string(),
+                        DocumentTypeHint::ArchitectureDecisionRecord,
+                        Some(decision.clone()),
+                        ContentType::Text,
+                        "text/plain",
+                        decision,
+                    ));
+
                     if decisions.len() >= 10 {
                         return decisions;
                     }
@@ -141,7 +116,12 @@ fn scan_inline_decisions(root: &Path) -> Vec<String> {
             }
         }
     }
+
     decisions
+}
+
+fn is_markdown_file(path: &Path) -> bool {
+    matches!(path.extension().and_then(|e| e.to_str()), Some("md"))
 }
 
 fn is_source_file(path: &Path) -> bool {
