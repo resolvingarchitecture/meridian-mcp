@@ -1,4 +1,8 @@
 // Transport Logic
+use crate::models::{
+    ArchitectureContext, ArchitectureReviewEstimates, ArchitectureReviewRequest, AuthNResult,
+    ContextResponse, Finding, HealthHeartbeat,
+};
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -6,10 +10,6 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use uuid::Uuid;
-use crate::models::{
-    ArchitectureContext, ArchitectureReviewEstimates, ArchitectureReviewRequest, AuthNResult,
-    ContextResponse, Finding, HealthHeartbeat,
-};
 
 static CLIENT: OnceLock<Client> = OnceLock::new();
 static SESSION: OnceLock<Arc<Mutex<Option<Session>>>> = OnceLock::new();
@@ -23,7 +23,6 @@ const FULL_REVIEW_ESTIMATES_PATH: &str = "/api/skills/review/full/estimate";
 const FULL_REVIEW_PATH: &str = "/api/skills/review/full";
 const INTERMEDIATE_REVIEW_PATH: &str = "/api/skills/review/intermediate";
 const SESSION_EXPIRY_SAFETY_MARGIN_MILLIS: u64 = 30_000;
-
 
 #[derive(Debug, Clone, Serialize)]
 struct AuthNRequest {
@@ -384,21 +383,25 @@ pub async fn test_backend_health() -> Result<HealthHeartbeat> {
     let backend_url = crate::config::backend_url()?;
     let url = format!("{backend_url}{HEALTH_HEARTBEAT_PATH}");
 
-    let response = http()
-        .get(&url)
-        .send()
-        .await
-        .context("failed to reach backend health heartbeat endpoint")?;
+    let response = match http().get(&url).send().await {
+        Ok(response) => response,
+        Err(_) => {
+            return Ok(HealthHeartbeat {
+                status: "DOWN".to_string(),
+                timestamp: humantime::format_rfc3339_nanos(SystemTime::now()).to_string(),
+            });
+        }
+    };
 
     match response.status() {
         s if s.is_success() => response
             .json()
             .await
             .context("failed to parse backend health heartbeat response"),
-        status => {
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("backend health heartbeat error {status}: {body}")
-        }
+        _ => Ok(response.json().await.unwrap_or_else(|_| HealthHeartbeat {
+            status: "DOWN".to_string(),
+            timestamp: humantime::format_rfc3339_nanos(SystemTime::now()).to_string(),
+        })),
     }
 }
 

@@ -1,5 +1,5 @@
 use ignore::WalkBuilder;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 pub const IGNORED_DIRS: &[&str] = &[
     "node_modules",
@@ -16,7 +16,6 @@ pub const IGNORED_DIRS: &[&str] = &[
     "obj",
 ];
 
-
 /// Collect all paths in the project, respecting .gitignore.
 /// Returns paths only — no file content read at this stage.
 pub fn collect_paths(root: &std::path::Path) -> Vec<PathBuf> {
@@ -31,4 +30,3 @@ pub fn collect_paths(root: &std::path::Path) -> Vec<PathBuf> {
         .filter_map(|entry| entry.ok().map(|e| e.into_path()))
         .collect()
 }
-

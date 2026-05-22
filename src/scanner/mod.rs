@@ -1,6 +1,6 @@
+use crate::models::DocumentInput;
 use anyhow::Result;
 use std::path::Path;
-use crate::models::DocumentInput;
 
 pub mod adrs;
 pub mod documents;

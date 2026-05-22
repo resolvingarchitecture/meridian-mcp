@@ -1,16 +1,17 @@
 // Orchestrator
+use crate::scanner::documents;
+use crate::models::{
+    AddContextRequest, ArchitectureContext, ArchitectureModel, CachedArchitectureReviewRequest,
+    ChangedFile, ContentType, DocumentTypeHint, DocumentInput, FullReviewEstimatesRequest,
+    FullReviewRequest, IntermediateReviewRequest, ReviewMode, ReviewOptions, ReviewPurpose,
+    ScanProjectRequest,
+};
 use anyhow::{Context, Result};
-use rmcp::{handler::server::tool::Parameters, model::ServerInfo, schemars, tool, ServerHandler};
-use serde::Deserialize;
+use rmcp::{handler::server::tool::Parameters, model::ServerInfo, tool, ServerHandler};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use tracing::info;
 use uuid::Uuid;
-use crate::models::{
-    AddContextRequest, ArchitectureModel, ArchitectureContext, CachedArchitectureReviewRequest, ContentType,
-    DocumentInput, FullReviewEstimatesRequest, FullReviewRequest, IntermediateReviewRequest, InvalidateCacheRequest,
-    ReviewMode, ReviewOptions, ReviewPurpose, ScanProjectRequest,
-};
 
 mod agent;
 mod cache;
@@ -188,17 +189,23 @@ impl MeridianServer {
     }
 
     #[tool(
-        description = "Stage 3 of the review workflow. Run an intermediate review for a file change. \
-        This must be called only after run_full_review has completed."
+        description = "Stage 3 of the review workflow. Run an intermediate architecture review for a submitted change set, not a single file. \
+        This must be called only after run_full_review has completed. \
+        The caller must provide the changes to review, such as a unified diff, IDE-collected change set, or agent-produced change summary. \
+        Meridian relays the submitted changes with the cached ArchitectureModel. The backend determines whether architectural drift is probable and whether another full review is recommended or required."
     )]
     async fn run_intermediate_review(
         &self,
         Parameters(req): Parameters<IntermediateReviewRequest>,
     ) -> String {
-        let file_path = req.file_path;
-        let content = req.content;
+        info!("run_intermediate_review: change set");
 
-        info!("run_intermediate_review: {}", file_path);
+        if req.changes.trim().is_empty() {
+            return json!({
+                "error": "changes must not be empty. Submit a unified diff, IDE-collected change set, or agent-produced change summary."
+            })
+            .to_string();
+        }
 
         let cached = match load_or_scan_request() {
             Ok(cached) => cached,
@@ -207,7 +214,12 @@ impl MeridianServer {
             }
         };
 
-        let reviewed_document = reviewed_file_document(&file_path, content);
+        let reviewed_document = reviewed_change_set_document(
+            req.changes,
+            req.change_summary,
+            req.changed_files,
+        );
+
         let request = cached.request_for_review(
             ReviewMode::Single,
             ReviewPurpose::Intermediate,
@@ -218,11 +230,14 @@ impl MeridianServer {
         match agent::run_intermediate_review(&request).await {
             Ok(findings) => {
                 info!(
-                    "run_intermediate_review: {} finding(s) for {}",
-                    findings.len(),
-                    file_path
+                    "run_intermediate_review: {} finding(s) for submitted change set",
+                    findings.len()
                 );
-                json!({ "findings": findings }).to_string()
+                json!({
+                    "findings": findings,
+                    "decision_authority": "Meridian recommends. The customer organization decides."
+                })
+                .to_string()
             }
             Err(e) => {
                 tracing::error!("run_intermediate_review failed: {}", e);
@@ -252,6 +267,19 @@ fn load_cached_request() -> Result<CachedArchitectureReviewRequest> {
     }
 }
 
+fn load_or_scan_request() -> Result<CachedArchitectureReviewRequest> {
+    match cache::get()? {
+        Some(cached) => Ok(cached),
+        None => {
+            let root = std::env::current_dir().context("failed to determine current directory")?;
+            scan_into_cached_request(
+                root.to_str()
+                    .context("current directory path contains invalid UTF-8")?,
+            )
+        }
+    }
+}
+
 fn scan_into_cached_request(root_dir: &str) -> Result<CachedArchitectureReviewRequest> {
     let path = std::path::Path::new(root_dir);
 
@@ -266,8 +294,8 @@ fn scan_into_cached_request(root_dir: &str) -> Result<CachedArchitectureReviewRe
     let documents = scanner::scan(path)
         .with_context(|| format!("failed to scan architecture documents for: {root_dir}"))?;
 
-    let mut cached = cache::get()?
-        .unwrap_or_else(|| CachedArchitectureReviewRequest::new(Uuid::new_v4()));
+    let mut cached =
+        cache::get()?.unwrap_or_else(|| CachedArchitectureReviewRequest::new(Uuid::new_v4()));
 
     cached.upsert_documents(documents);
 
@@ -296,15 +324,47 @@ fn resolve_context_id_for_current_model(requested_context_id: Option<Uuid>) -> R
     Ok(context_id)
 }
 
-fn reviewed_file_document(file_path: &str, content: String) -> DocumentInput {
+fn reviewed_change_set_document(
+    changes: String,
+    change_summary: Option<String>,
+    changed_files: Option<Vec<ChangedFile>>,
+) -> DocumentInput {
+    let changed_files_note = changed_files
+        .as_ref()
+        .filter(|files| !files.is_empty())
+        .map(|files| {
+            let files = files
+                .iter()
+                .map(|file| format!("{} ({:?})", file.path, file.change_type))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            format!(" Changed files: {files}.")
+        })
+        .unwrap_or_default();
+
+    let stated_scope = match change_summary {
+        Some(summary) if !summary.trim().is_empty() => {
+            Some(format!(
+                "Submitted change set for intermediate architecture review. Summary: {}.{}",
+                summary.trim(),
+                changed_files_note
+            ))
+        }
+        _ => Some(format!(
+            "Submitted change set for intermediate architecture review.{}",
+            changed_files_note
+        )),
+    };
+
     documents::new_document_input(
-        Path::new(file_path),
-        file_path.to_string(),
+        Path::new("submitted-change-set"),
+        "submitted-change-set".to_string(),
         DocumentTypeHint::Codebase,
-        Some("Source file submitted for architecture review".to_string()),
+        stated_scope,
         ContentType::Code,
-        "text/plain",
-        content,
+        "text/x-diff",
+        changes,
     )
 }
 
@@ -337,38 +397,29 @@ async fn run_cli(args: Vec<String>) -> Result<()> {
             }
         },
         Some("review") => match args.get(2).map(String::as_str) {
-            Some("estimates") => {
-                let file_path = args
-                    .get(3)
-                    .context("usage: meridian review prompt <file_path>")?;
-                cli_review_estimates(file_path).await
+            Some("estimate") => {
+                cli_review_estimate().await
             }
             Some("full") => {
-                let file_path = args
-                    .get(3)
-                    .context("usage: meridian review full <file_path>")?;
-                cli_review_full(file_path).await
+                cli_review_full().await
             }
             Some("intermediate") => {
-                let file_path = args
+                let changes_file = args
                     .get(3)
-                    .context("usage: meridian review intermediate <file_path>")?;
-                cli_review_intermediate(file_path).await
+                    .context("usage: meridian review intermediate <changes_file>")?;
+                cli_review_intermediate(changes_file).await
             }
-            Some(file_path) => cli_review_guidance(file_path),
             None => {
-                anyhow::bail!(
-                    "usage: meridian review <file_path>\n       meridian review <prompt|full|intermediate> <file_path>"
-                );
+                cli_review_guidance()
             }
         },
         Some("cache") => match args.get(2).map(String::as_str) {
             Some("clear") => {
                 let root = args.get(3).map(String::as_str).unwrap_or(".");
-                cli_cache_clear(root)
+                cli_cache_clear()
             }
             _ => {
-                anyhow::bail!("usage: meridian cache clear [root_dir]");
+                anyhow::bail!("usage: meridian cache clear");
             }
         },
         Some("context") => match args.get(2).map(String::as_str) {
@@ -380,7 +431,7 @@ async fn run_cli(args: Vec<String>) -> Result<()> {
                 cli_context_add(file_path).await
             }
             _ => {
-                anyhow::bail!("usage: meridian context <template|add> [json_file]");
+                anyhow::bail!("usage: meridian context <template|add [json_file]>");
             }
         },
         Some("test") => match args.get(2).map(String::as_str) {
@@ -507,8 +558,8 @@ fn multi_source_scan_workflow_guidance(any_missing_adrs: bool) -> serde_json::Va
                 "meridian context template > meridian-context.json",
                 "Edit meridian-context.json with stakeholders, concerns, agreed decisions, constraints, risks, standards, scope notes, and non-functional requirements.",
                 "meridian context add meridian-context.json",
-                "meridian review prompt <file_path>",
-                "meridian review full <file_path>"
+                "meridian review estimate",
+                "meridian review full"
             ],
             "multi_source_note": "Each scanned root is cached independently. The backend remains responsible for deciding how roots relate to one architecture context, review scope, and full-review baseline.",
             "context_to_collect": [
@@ -531,21 +582,28 @@ fn multi_source_scan_workflow_guidance(any_missing_adrs: bool) -> serde_json::Va
             "next_step": "full_review",
             "message": "Scanned source roots were cached independently. You can now prepare a full review with the backend.",
             "recommended_commands": [
-                "meridian review prompt <file_path>",
-                "meridian review full <file_path>"
+                "meridian review estimate",
+                "meridian review full"
             ],
             "after_successful_full_review": [
-                "meridian review intermediate <file_path>"
+                "meridian review intermediate <changes_file>"
             ],
             "multi_source_note": "Meridian preserves source-root identity locally. The backend determines whether these roots belong to the same architecture context or review baseline."
         })
     }
 }
 
-async fn cli_review_estimates(file_path: &str) -> Result<()> {
-    let (model, content) = prepare_cli_review(file_path)?;
+async fn cli_review_estimate() -> Result<()> {
+    let cached = load_cached_request()?;
 
-    let resp = agent::build_full_review_estimates(&model, file_path, &content).await?;
+    let request = cached.request_for_review(
+        ReviewMode::Multiple,
+        ReviewPurpose::Full,
+        ReviewOptions::full_review(),
+        None,
+    );
+
+    let resp = agent::build_full_review_estimates(&request).await?;
 
     println!(
         "{}",
@@ -571,42 +629,70 @@ async fn cli_review_estimates(file_path: &str) -> Result<()> {
     Ok(())
 }
 
-async fn cli_review_full(file_path: &str) -> Result<()> {
-    let (model, content) = prepare_cli_review(file_path)?;
+async fn cli_review_full() -> Result<()> {
+    let cached = load_or_scan_request()?;
 
-    let findings = agent::run_full_review(&model, file_path, &content).await?;
+    let request = cached.request_for_review(
+        ReviewMode::Multiple,
+        ReviewPurpose::Full,
+        ReviewOptions::full_review(),
+        None,
+    );
+
+    let findings = agent::run_full_review(&request).await?;
 
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "findings": findings
+            "findings": findings,
+            "decision_authority": "Meridian recommends. The customer organization decides."
         }))?
     );
 
     Ok(())
 }
 
-async fn cli_review_intermediate(file_path: &str) -> Result<()> {
-    let (model, content) = prepare_cli_review(file_path)?;
+async fn cli_review_intermediate(changes_file: &str) -> Result<()> {
+    let changes = std::fs::read_to_string(changes_file)
+        .with_context(|| format!("failed to read changes file: {changes_file}"))?;
 
-    let findings = agent::run_intermediate_review(&model, file_path, &content).await?;
+    if changes.trim().is_empty() {
+        anyhow::bail!("changes file is empty: {changes_file}");
+    }
+
+    let cached = load_or_scan_request()?;
+
+    let reviewed_document = reviewed_change_set_document(
+        changes,
+        Some(format!("Changes loaded from {changes_file}")),
+        None,
+    );
+
+    let request = cached.request_for_review(
+        ReviewMode::Single,
+        ReviewPurpose::Intermediate,
+        ReviewOptions::intermediate_review(),
+        Some(reviewed_document),
+    );
+
+    let findings = agent::run_intermediate_review(&request).await?;
 
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "findings": findings
+            "findings": findings,
+            "decision_authority": "Meridian recommends. The customer organization decides."
         }))?
     );
 
     Ok(())
 }
 
-fn cli_review_guidance(file_path: &str) -> Result<()> {
+fn cli_review_guidance() -> Result<()> {
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
             "status": "guidance",
-            "file_path": file_path,
             "message": "Meridian review is a staged workflow. Scan architecture-significant sources first, add context if ADRs are missing, then run a full review. Intermediate review is only valid after a successful full review has established a backend baseline.",
             "workflow": [
                 {
@@ -626,17 +712,17 @@ fn cli_review_guidance(file_path: &str) -> Result<()> {
                 },
                 {
                     "step": 4,
-                    "command": format!("meridian review prompt {file_path}"),
+                    "command": format!("meridian review estimate"),
                     "purpose": "Ask the backend for full-review preparation guidance, domain estimates, missing context, or selection prompts."
                 },
                 {
                     "step": 5,
-                    "command": format!("meridian review full {file_path}"),
+                    "command": format!("meridian review full"),
                     "purpose": "Attempt a full review. A successful full review establishes the backend baseline for later intermediate reviews."
                 },
                 {
                     "step": 6,
-                    "command": format!("meridian review intermediate {file_path}"),
+                    "command": format!("meridian review intermediate <changes_file>"),
                     "purpose": "Use only after a successful full review baseline exists for the relevant architecture scope."
                 }
             ],
@@ -647,21 +733,7 @@ fn cli_review_guidance(file_path: &str) -> Result<()> {
     Ok(())
 }
 
-fn prepare_cli_review(file_path: &str) -> Result<(ArchitectureModel, String)> {
-    let file = PathBuf::from(file_path);
-
-    if !file.exists() {
-        anyhow::bail!("file not found: {file_path}");
-    }
-
-    if !file.is_file() {
-        anyhow::bail!("not a file: {file_path}");
-    }
-
-    let content = std::fs::read_to_string(&file)
-        .with_context(|| format!("failed to read file: {file_path}"))?;
-
-    let root = std::env::current_dir().context("failed to determine current directory")?;
+fn prepare_cli_review() -> Result<(ArchitectureModel, String)> {
 
     let model = match cache::get()? {
         Some(model) => model,
@@ -746,7 +818,7 @@ async fn cli_context_add(file_path: &str) -> Result<()> {
     let content = std::fs::read_to_string(file_path)
         .with_context(|| format!("failed to read context file: {file_path}"))?;
 
-    let mut context: agent::ArchitectureContext = serde_json::from_str(&content)
+    let mut context: ArchitectureContext = serde_json::from_str(&content)
         .with_context(|| format!("failed to parse context JSON: {file_path}"))?;
 
     context.context_id = Some(resolve_context_id_for_current_model(context.context_id)?);
@@ -761,9 +833,9 @@ async fn cli_context_add(file_path: &str) -> Result<()> {
             "context_percent_used": response.context_percent_used,
             "message": response.message,
             "next_steps": [
-                "meridian review prompt <file_path>",
-                "meridian review full <file_path>",
-                "After a successful full review, use: meridian review intermediate <file_path>"
+                "meridian review estimate",
+                "meridian review full",
+                "After a successful full review, use: meridian review intermediate <changes_file>"
             ]
         }))?
     );
@@ -884,11 +956,11 @@ Usage:
   meridian components list
   meridian context template
   meridian context add <json_file>
-  meridian review <file_path>
-  meridian review estimates <file_path>
-  meridian review full <file_path>
-  meridian review intermediate <file_path>
-  meridian cache clear [root_dir]
+  meridian review
+  meridian review estimate
+  meridian review full
+  meridian review intermediate <changes_file>
+  meridian cache clear
   meridian config set api-key <key>
   meridian config set backend-url <url>
   meridian test backend
@@ -904,18 +976,18 @@ Recommended Setup:
         meridian config set api-key m_live_restofkeyhere
     3. Test backend access:
         meridian test backend
-        If successful, returns: {{
-                                  "status": "UP",
-                                  "timestamp": "date-time-here"
-                                }}
+        Returns: {{
+                   "status": "UP|DOWN",
+                   "timestamp": "date-time-here"
+                 }}
     4. Test backend authentication:
         meridian login
-        If successful, returns: {{
-                                  "sessionId": "ID-here",
-                                  "expiresAt": 30-minutes-ahead-in-epoch-time-here,
-                                  "status": 200,
-                                  "message": "Login successful"
-                                }}
+        Returns: {{
+                   "sessionId": "ID-here",
+                   "expiresAt": 30-minutes-ahead-in-epoch-time-here,
+                   "status": 200,
+                   "message": "Login successful"
+                 }}
 
 
 Recommended review workflow:
@@ -944,7 +1016,8 @@ Recommended review workflow:
        meridian review full
 
     5. After a successful full review establishes a backend baseline:
-       meridian review intermediate <file_path>
+       git diff > changes.diff
+       meridian review intermediate changes.diff
 
 Notes:
     meridian review

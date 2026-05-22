@@ -1,5 +1,5 @@
 use crate::models::{ContentType, DocumentInput, DocumentTypeHint};
-use crate::scanner:documents;
+use crate::scanner::documents;
 use std::path::{Path, PathBuf};
 
 /// Known locations where teams store Architecture Decision Records.

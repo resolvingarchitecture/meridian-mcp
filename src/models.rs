@@ -2,116 +2,6 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum Domain {
-    Application,
-    Integration,
-    Data,
-    Infrastructure,
-    Security,
-    Enterprise,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum ReviewMode {
-    Single,
-    Multiple,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum ReviewPurpose {
-    Full,
-    Intermediate,
-}
-
-#[derive(Serialize)]
-struct ReviewOptions {
-    #[serde(rename = "inferStakeholders")]
-    infer_stakeholders: bool,
-    #[serde(rename = "inferArchitecturalDecisions")]
-    infer_architectural_decisions: bool,
-    #[serde(rename = "includeQualityAttributeRanking")]
-    include_quality_attribute_ranking: bool,
-    #[serde(rename = "domainsToReview")]
-    domains_to_review: Vec<Domain>,
-    #[serde(rename = "minimumConfidenceThreshold")]
-    minimum_confidence_threshold: f64,
-    #[serde(rename = "minimumGapSeverity")]
-    minimum_gap_severity: GapSeverity,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum GapSeverity {
-    Low,
-    Medium,
-    High,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DocumentInput {
-    id: String,
-    title: String,
-    filename: String,
-    type_hint: DocumentTypeHint,
-    author: Option<String>,
-    date: Option<String>,
-    version: Option<String>,
-    stated_scope: Option<String>,
-    organization_context: Option<serde_json::Value>,
-    known_stakeholders: Vec<serde_json::Value>,
-    known_decisions: Vec<serde_json::Value>,
-    content: Vec<DocumentContent>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DocumentContent {
-    content_type: ContentType,
-    media_type: String,
-    encoding: ContentEncoding,
-    data: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum DocumentTypeHint {
-    ApplicationDesign,
-    ArchitectureDecisionRecord,
-    IntegrationDesign,
-    DataModel,
-    InfrastructureDesign,
-    SecurityDesign,
-    ThreatModel,
-    EnterpriseRoadmap,
-    StandardsDocument,
-    Runbook,
-    Codebase,
-    Other,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum ContentType {
-    Text,
-    Base64Pdf,
-    Base64Img,
-    Url,
-    Code,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum ContentEncoding {
-    Plain,
-    Base64,
-    Utf8,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArchitectureContext {
     pub context_id: Option<Uuid>,
@@ -135,6 +25,7 @@ pub struct ContextResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Finding {
     pub severity: String,
     #[serde(rename = "type")]
@@ -183,18 +74,14 @@ pub struct ReviewTargetEstimate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArchitectureReviewEstimates {
-    #[serde(rename = "context_id")]
     pub context_id: String,
     pub status: String,
     pub question: String,
-    #[serde(rename = "domain_estimates")]
     pub domain_estimates: Vec<DomainEstimate>,
-    #[serde(rename = "sats_available")]
     pub sats_available: u64,
-    #[serde(rename = "total_estimated_price")]
     pub total_estimated_price: u64,
-    #[serde(rename = "requires_user_selection")]
     pub requires_user_selection: bool,
 }
 
@@ -227,15 +114,13 @@ pub struct HealthHeartbeat {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuthNResult {
-    #[serde(rename = "sessionId")]
     pub session_id: String,
-    #[serde(rename = "expiresAt")]
     pub expires_at: u64,
     pub status: Option<i32>,
     pub message: Option<String>,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -247,52 +132,81 @@ pub enum ComplexityModifier {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct AddContextRequest {
+#[serde(rename_all = "camelCase")]
+pub struct AddContextRequest {
     #[schemars(with = "Option<String>")]
-    context_id: Option<uuid::Uuid>,
-    organization_context: Option<serde_json::Value>,
-    business_goals: Option<Vec<String>>,
-    stakeholders: Option<Vec<serde_json::Value>>,
-    decisions: Option<Vec<serde_json::Value>>,
-    constraints: Option<Vec<String>>,
-    risks: Option<Vec<String>>,
-    standards: Option<Vec<String>>,
-    scope_notes: Option<Vec<String>>,
-    freeform_notes: Option<String>,
+    pub context_id: Option<uuid::Uuid>,
+    pub organization_context: Option<serde_json::Value>,
+    pub business_goals: Option<Vec<String>>,
+    pub stakeholders: Option<Vec<serde_json::Value>>,
+    pub decisions: Option<Vec<serde_json::Value>>,
+    pub constraints: Option<Vec<String>>,
+    pub risks: Option<Vec<String>>,
+    pub standards: Option<Vec<String>>,
+    pub scope_notes: Option<Vec<String>>,
+    pub freeform_notes: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct ScanProjectRequest {
-    root_dir: String,
+#[serde(rename_all = "camelCase")]
+pub struct ScanProjectRequest {
+    pub root_dir: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct FullReviewEstimatesRequest {}
+pub struct FullReviewEstimatesRequest {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct FullReviewRequest {}
+pub struct FullReviewRequest {}
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct IntermediateReviewRequest {
-    file_path: String,
-    content: String,
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct IntermediateReviewRequest {
+    /// Authoritative change set submitted by the IDE, agent, or CLI.
+    /// This may be a unified diff, a structured text summary, or an agent-produced
+    /// description of creates/modifies/deletes/renames.
+    pub changes: String,
+
+    /// Optional caller-provided summary of the intent or scope of the changes.
+    pub change_summary: Option<String>,
+
+    /// Optional structured list of changed files represented by `changes`.
+    pub changed_files: Option<Vec<ChangedFile>>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangedFile {
+    pub path: String,
+    pub change_type: ChangeType,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ChangeType {
+    Created,
+    Modified,
+    Deleted,
+    Renamed,
+    Moved,
+    Unknown,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct EvaluateDocumentChangeRequest {
-    file_path: String,
-    content: String,
+pub struct EvaluateDocumentChangeRequest {
+    pub file_path: String,
+    pub content: String,
 }
 
 #[derive(Debug, Clone)]
-struct DocumentChangeEvaluation {
-    requires_intermediate_review: bool,
-    reason: String,
-    updated_document: Option<DocumentInput>,
+pub struct DocumentChangeEvaluation {
+    pub requires_intermediate_review: bool,
+    pub reason: String,
+    pub updated_document: Option<DocumentInput>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct InvalidateCacheRequest {}
+pub struct InvalidateCacheRequest {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -440,56 +354,6 @@ impl ReviewOptions {
     }
 }
 
-impl ReviewOptions {
-    fn default_options() -> Self {
-        Self {
-            infer_stakeholders: true,
-            infer_architectural_decisions: true,
-            include_quality_attribute_ranking: true,
-            domains_to_review: vec![
-                Domain::Application,
-                Domain::Integration,
-                Domain::Data,
-                Domain::Infrastructure,
-                Domain::Security,
-                Domain::Enterprise,
-            ],
-            components_to_review: vec![],
-            minimum_confidence_threshold: 0.0,
-            minimum_gap_severity: GapSeverity::Low,
-        }
-    }
-
-    fn intermediate_options() -> Self {
-        Self {
-            infer_stakeholders: false,
-            infer_architectural_decisions: false,
-            include_quality_attribute_ranking: false,
-            domains_to_review: vec![
-                Domain::Application,
-                Domain::Integration,
-                Domain::Data,
-                Domain::Infrastructure,
-                Domain::Security,
-                Domain::Enterprise,
-            ],
-            minimum_confidence_threshold: 0.4,
-            minimum_gap_severity: GapSeverity::High,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum Domain {
-    Application,
-    Integration,
-    Data,
-    Infrastructure,
-    Security,
-    Enterprise,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum GapSeverity {
@@ -567,6 +431,7 @@ pub enum ContentEncoding {
 pub type ArchModel = ArchitectureModel;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArchitectureModel {
     pub context_id: Option<Uuid>,
     pub components: Vec<ArchitectureComponent>,
@@ -594,11 +459,12 @@ impl ArchitectureModel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArchitectureComponent {
     pub component_id: String,
     pub name: String,
     pub component_type: ArchitectureComponentType,
-    pub domain: ArchitectureDomain,
+    pub domain: Domain,
     pub root: Option<String>,
     pub language: Option<String>,
     pub framework: Option<String>,
@@ -608,6 +474,7 @@ pub struct ArchitectureComponent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ArchitectureComponentType {
     Application,
     Service,
@@ -622,7 +489,8 @@ pub enum ArchitectureComponentType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ArchitectureDomain {
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Domain {
     Application,
     Integration,
     Data,
@@ -632,6 +500,7 @@ pub enum ArchitectureDomain {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ArchitectureObservations {
     pub layers: Vec<String>,
     pub layer_order: Vec<String>,
@@ -651,6 +520,7 @@ impl ArchitectureObservations {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArchitectureRelationship {
     pub source_component_id: String,
     pub target_component_id: String,
@@ -661,6 +531,7 @@ pub struct ArchitectureRelationship {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ArchitectureRelationshipType {
     Calls,
     PublishesTo,
@@ -675,6 +546,7 @@ pub enum ArchitectureRelationshipType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArchitectureEvidence {
     pub evidence_id: String,
     pub source_type: String,
