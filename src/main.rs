@@ -1,8 +1,8 @@
 // Orchestrator
 use crate::models::{
     AddContextRequest, ArchitectureContext, CachedArchitectureReviewRequest, ChangedFile,
-    ContentType, DocumentInput, DocumentTypeHint,
-    IntermediateReviewRequest, ReviewMode, ReviewOptions, ReviewPurpose, ScanProjectRequest,
+    ContentType, DocumentInput, DocumentTypeHint, IntermediateReviewRequest, ReviewMode,
+    ReviewOptions, ReviewPurpose, ScanProjectRequest,
 };
 use crate::scanner::documents;
 use anyhow::{Context, Result};
@@ -275,7 +275,9 @@ fn load_or_scan_request() -> Result<CachedArchitectureReviewRequest> {
     }
 }
 
-fn resolve_intermediate_change_set(req: IntermediateReviewRequest) -> Result<(String, Option<String>, Option<Vec<ChangedFile>>)> {
+fn resolve_intermediate_change_set(
+    req: IntermediateReviewRequest,
+) -> Result<(String, Option<String>, Option<Vec<ChangedFile>>)> {
     if let Some(changes) = req.changes {
         if !changes.trim().is_empty() {
             return Ok((changes, req.change_summary, req.changed_files));
@@ -451,9 +453,7 @@ async fn run_cli(args: Vec<String>) -> Result<()> {
             }
         },
         Some("cache") => match args.get(2).map(String::as_str) {
-            Some("clear") => {
-                cli_cache_clear()
-            }
+            Some("clear") => cli_cache_clear(),
             _ => {
                 anyhow::bail!("usage: meridian cache clear");
             }
