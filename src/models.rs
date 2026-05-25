@@ -165,7 +165,13 @@ pub struct IntermediateReviewRequest {
     /// Authoritative change set submitted by the IDE, agent, or CLI.
     /// This may be a unified diff, a structured text summary, or an agent-produced
     /// description of creates/modifies/deletes/renames.
-    pub changes: String,
+    ///
+    /// If omitted or blank, Meridian will attempt to collect the current Git
+    /// working tree change set from `root_dir` or the current directory.
+    pub changes: Option<String>,
+
+    /// Optional root directory used when collecting a Git change set.
+    pub root_dir: Option<String>,
 
     /// Optional caller-provided summary of the intent or scope of the changes.
     pub change_summary: Option<String>,
