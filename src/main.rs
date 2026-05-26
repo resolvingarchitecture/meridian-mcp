@@ -500,7 +500,7 @@ async fn run_cli(args: Vec<String>) -> Result<()> {
         },
         Some("doctor") => cli_doctor(),
         Some("version") | Some("--version") | Some("-V") => {
-            println!("meridian {}", env!("CARGO_PKG_VERSION"));
+            print_version();
             Ok(())
         }
         Some("help") | Some("--help") | Some("-h") => {
@@ -618,11 +618,11 @@ fn multi_source_scan_workflow_guidance(any_missing_adrs: bool) -> serde_json::Va
             "next_step": "full_review",
             "message": "Scanned source roots were cached independently. You can now prepare a full review with the backend.",
             "recommended_commands": [
-                "meridian review estimate",
-                "meridian review full"
+                "meridian-mcp review estimate",
+                "meridian-mcp review full"
             ],
             "after_successful_full_review": [
-                "meridian review intermediate <changes_file>"
+                "meridian-mcp review intermediate <changes_file>"
             ],
             "multi_source_note": "Meridian preserves source-root identity locally. The backend determines whether these roots belong to the same architecture context or review baseline."
         })
@@ -733,32 +733,32 @@ fn cli_review_guidance() -> Result<()> {
             "workflow": [
                 {
                     "step": 1,
-                    "command": "meridian scan [root_dir]",
+                    "command": "meridian-mcp scan [root_dir]",
                     "purpose": "Scan a directory containing architecture-significant artifacts, ADRs, architecture docs, code structure, infrastructure definitions, or related design material."
                 },
                 {
                     "step": 2,
-                    "command": "meridian context template > meridian-context.json",
+                    "command": "meridian-mcp context template > meridian-context.json",
                     "purpose": "Use this if the scan finds no ADRs or if the backend needs more architecture context."
                 },
                 {
                     "step": 3,
-                    "command": "meridian context add meridian-context.json",
+                    "command": "meridian-mcp context add meridian-context.json",
                     "purpose": "Send stakeholders, concerns, agreed decisions, constraints, risks, standards, and non-functional requirements to the backend as architecture context."
                 },
                 {
                     "step": 4,
-                    "command": format!("meridian review estimate"),
+                    "command": format!("meridian-mcp review estimate"),
                     "purpose": "Ask the backend for full-review preparation guidance, domain estimates, missing context, or selection prompts."
                 },
                 {
                     "step": 5,
-                    "command": format!("meridian review full"),
+                    "command": format!("meridian-mcp review full"),
                     "purpose": "Attempt a full review. A successful full review establishes the backend baseline for later intermediate reviews."
                 },
                 {
                     "step": 6,
-                    "command": format!("meridian review intermediate <changes_file>"),
+                    "command": format!("meridian-mcp review intermediate <changes_file>"),
                     "purpose": "Use only after a successful full review baseline exists for the relevant architecture scope."
                 }
             ],
@@ -853,9 +853,9 @@ async fn cli_context_add(file_path: &str) -> Result<()> {
             "context_percent_used": response.context_percent_used,
             "message": response.message,
             "next_steps": [
-                "meridian review estimate",
-                "meridian review full",
-                "After a successful full review, use: meridian review intermediate <changes_file>"
+                "meridian-mcp review estimate",
+                "meridian-mcp review full",
+                "After a successful full review, use: meridian-mcp review intermediate <changes_file>"
             ]
         }))?
     );
@@ -952,7 +952,7 @@ fn cli_doctor() -> Result<()> {
         "{}",
         serde_json::to_string_pretty(&json!({
             "status": if api_key_status == "missing" { "warning" } else { "ok" },
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": version_info(),
             "api_key": api_key_status,
             "backend_url": backend_url,
             "config_file": config::config_file_display_path()
@@ -966,42 +966,67 @@ fn cli_doctor() -> Result<()> {
     Ok(())
 }
 
+fn version_info() -> serde_json::Value {
+    json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "git_commit": option_env!("MERIDIAN_GIT_HASH").unwrap_or("unknown"),
+        "git_dirty": option_env!("MERIDIAN_GIT_DIRTY").unwrap_or("unknown"),
+        "built_at": option_env!("MERIDIAN_BUILD_TIMESTAMP").unwrap_or("unknown"),
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" }
+    })
+}
+
+fn print_version() {
+    println!(
+        "meridian {}\ncommit: {}\ndirty: {}\nbuilt: {}\nprofile: {}",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("MERIDIAN_GIT_HASH").unwrap_or("unknown"),
+        option_env!("MERIDIAN_GIT_DIRTY").unwrap_or("unknown"),
+        option_env!("MERIDIAN_BUILD_TIMESTAMP").unwrap_or("unknown"),
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
+    );
+}
+
 fn print_help() {
     println!(
         r#"Meridian local architecture review MCP server and CLI
 
 Usage:
-  meridian mcp
-  meridian scan [root_dir...]
-  meridian components list
-  meridian context template
-  meridian context add <json_file>
-  meridian review
-  meridian review estimate
-  meridian review full
-  meridian review intermediate <changes_file>
-  meridian cache clear
-  meridian config set api-key <key>
-  meridian config set backend-url <url>
-  meridian test backend
-  meridian login
-  meridian logout
-  meridian doctor
-  meridian version
-  meridian help
+  meridian-mcp mcp
+  meridian-mcp scan [root_dir...]
+  meridian-mcp components list
+  meridian-mcp context template
+  meridian-mcp context add <json_file>
+  meridian-mcp review
+  meridian-mcp review estimate
+  meridian-mcp review full
+  meridian-mcp review intermediate <changes_file>
+  meridian-mcp cache clear
+  meridian-mcp config set api-key <key>
+  meridian-mcp config set backend-url <url>
+  meridian-mcp test backend
+  meridian-mcp login
+  meridian-mcp logout
+  meridian-mcp doctor
+  meridian-mcp version
+  meridian-mcp help
 
 Recommended Setup:
     1. Login to Meridian site and create an api-key. Remember to copy it before leaving page as it can longer be restored. It starts with m_live_.
     2. Set api-key in config:
-        meridian config set api-key m_live_restofkeyhere
+        meridian-mcp config set api-key m_live_restofkeyhere
     3. Test backend access:
-        meridian test backend
+        meridian-mcp test backend
         Returns: {{
                    "status": "UP|DOWN",
                    "timestamp": "date-time-here"
                  }}
     4. Test backend authentication:
-        meridian login
+        meridian-mcp login
         Returns: {{
                    "sessionId": "ID-here",
                    "expiresAt": 30-minutes-ahead-in-epoch-time-here,
@@ -1012,35 +1037,35 @@ Recommended Setup:
 
 Recommended review workflow:
     1. Scan one or more architecture-significant source roots:
-        meridian scan [root_dir...]
+        meridian-mcp scan [root_dir...]
 
         Examples:
-        meridian scan .
-        meridian scan ../frontend ../backend ../infra ../architecture-docs
+        meridian-mcp scan .
+        meridian-mcp scan ../frontend ../backend ../infra ../architecture-docs
 
      Each root is scanned and cached into a single ArchitectureModel. Architecture can span
      multiple projects, repositories, infrastructure roots, API contracts,
      ADR folders, and architecture-document locations.
 
     2. If no ADRs or architecture records are present in one or more sources:
-       meridian context template > meridian-context.json
+       meridian-mcp context template > meridian-context.json
        Edit meridian-context.json with stakeholders, stakeholder concerns,
        agreed decisions, constraints, risks, standards, scope notes, and
        non-functional requirements.
 
     3. Add context to the Meridian backend:
-       meridian context add meridian-context.json
+       meridian-mcp context add meridian-context.json
 
     4. Prepare and run a full review:
-       meridian review estimates
-       meridian review full
+       meridian-mcp review estimate
+       meridian-mcp review full
 
     5. After a successful full review establishes a backend baseline:
        git diff > changes.diff
-       meridian review intermediate changes.diff
+       meridian-mcp review intermediate changes.diff
 
 Notes:
-    meridian review
+    meridian-mcp review
        Prints workflow guidance.
 
     Meridian preserves source-root identity locally. The backend decides how
@@ -1059,8 +1084,10 @@ Environment:
 
 async fn run_mcp_server() -> Result<()> {
     info!(
-        "meridian starting in MCP mode (v{})",
-        env!("CARGO_PKG_VERSION")
+        "meridian starting in MCP mode (v{}, commit={}, built_at={})",
+        env!("CARGO_PKG_VERSION"),
+        option_env!("MERIDIAN_GIT_HASH").unwrap_or("unknown"),
+        option_env!("MERIDIAN_BUILD_TIMESTAMP").unwrap_or("unknown")
     );
 
     if crate::config::api_key().is_err() {

@@ -82,6 +82,16 @@ fn now_epoch_millis() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
+fn session_bearer_token(session_id: &str) -> String {
+    let session_id = session_id.trim();
+
+    if session_id.starts_with("m_session_") {
+        session_id.to_string()
+    } else {
+        format!("m_session_{session_id}")
+    }
+}
+
 async fn session_id(api_key: &str, backend_url: &str) -> Result<String> {
     let refreshable_session = {
         let session = session_cache().lock().await;
@@ -164,10 +174,11 @@ async fn login_result(api_key: &str, backend_url: &str) -> Result<AuthNResult> {
 
 async fn refresh_session(current_session_id: &str, backend_url: &str) -> Result<String> {
     let url = format!("{backend_url}{SESSION_REFRESH}");
+    let bearer_token = session_bearer_token(current_session_id);
 
     let response = http()
         .post(&url)
-        .bearer_auth(current_session_id)
+        .bearer_auth(bearer_token)
         .send()
         .await
         .context("failed to reach backend session refresh endpoint")?;
@@ -212,10 +223,11 @@ pub async fn logout() -> Result<()> {
     };
 
     let url = format!("{backend_url}{LOGOUT_PATH}");
+    let bearer_token = session_bearer_token(&current_session_id);
 
     let response = http()
         .post(&url)
-        .bearer_auth(&current_session_id)
+        .bearer_auth(bearer_token)
         .send()
         .await
         .context("failed to reach backend logout endpoint")?;
@@ -242,9 +254,10 @@ async fn send_backend_request(
     session_id: &str,
     body: &ArchitectureReviewRequest,
 ) -> Result<reqwest::Response> {
+    let bearer_token = session_bearer_token(session_id);
     http()
         .post(url)
-        .bearer_auth(session_id)
+        .bearer_auth(bearer_token)
         .json(body)
         .send()
         .await
@@ -256,9 +269,10 @@ async fn send_context_request(
     session_id: &str,
     body: &ContentEnrichmentRequest,
 ) -> Result<reqwest::Response> {
+    let bearer_token = session_bearer_token(session_id);
     http()
         .post(url)
-        .bearer_auth(session_id)
+        .bearer_auth(bearer_token)
         .json(body)
         .send()
         .await

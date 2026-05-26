@@ -1,7 +1,8 @@
 [package]
 name        = "meridian-mcp"
-version     = "0.1.0"
+version     = "0.1.1"
 edition     = "2021"
+build       = "build.rs"
 description = "Meridian MCP — local architecture review MCP server and CLI"
 license     = "MIT"
 repository  = "https://github.com/resolvingarchitecture/meridian-mcp"

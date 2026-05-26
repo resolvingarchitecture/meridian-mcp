@@ -32,11 +32,13 @@ pub fn get() -> Result<Option<CachedArchitectureReviewRequest>> {
 pub fn set(cached: &CachedArchitectureReviewRequest) -> Result<()> {
     let bytes = serde_json::to_vec(cached)?;
     db()?.insert(ARCHITECTURE_REVIEW_REQUEST_KEY, bytes)?;
+    db()?.flush()?;
     Ok(())
 }
 
 /// Remove the cached ArchitectureReviewRequest template.
 pub fn invalidate() -> Result<()> {
     db()?.remove(ARCHITECTURE_REVIEW_REQUEST_KEY)?;
+    db()?.flush()?;
     Ok(())
 }
