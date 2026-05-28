@@ -42,30 +42,28 @@ pub struct Finding {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DomainEstimate {
+pub struct DomainReadiness {
     pub domain: Domain,
     pub present: bool,
-    pub estimated_components: i32,
+    pub estimated_num_components: i32,
     pub complexity_modifier: ComplexityModifier,
-    pub estimated_price: u64,
     pub rationale: String,
     pub confidence: f64,
     pub sufficient_for_high_fidelity_review: bool,
     pub supporting_evidence: Vec<String>,
     pub missing_context: Vec<String>,
     pub warnings: Vec<String>,
-    pub review_targets: Vec<ReviewTargetEstimate>,
+    pub review_targets: Vec<ReviewTargetReadiness>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ReviewTargetEstimate {
+pub struct ReviewTargetReadiness {
     pub target_id: String,
     pub target_name: String,
     pub domain: Domain,
     pub target_type: String,
     pub complexity_modifier: ComplexityModifier,
-    pub estimated_price: u64,
     pub confidence: f64,
     pub sufficient_for_high_fidelity_review: bool,
     pub supporting_evidence: Vec<String>,
@@ -75,36 +73,11 @@ pub struct ReviewTargetEstimate {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ArchitectureReviewEstimates {
+pub struct ArchitectureReviewReadiness {
     pub context_id: String,
     pub status: String,
     pub question: String,
-    pub domain_estimates: Vec<DomainEstimate>,
-    pub sats_available: u64,
-    pub total_estimated_price: u64,
-    pub requires_user_selection: bool,
-}
-
-impl ArchitectureReviewEstimates {
-    pub fn present_estimated_price(&self) -> u64 {
-        self.domain_estimates
-            .iter()
-            .filter(|estimate| estimate.present)
-            .map(|estimate| estimate.estimated_price)
-            .sum()
-    }
-
-    pub fn selection_guidance(&self) -> Option<&'static str> {
-        if self.requires_user_selection {
-            Some("Present domain_estimates to the user. The selected domains' combined estimated_price must be less than or equal to sats_available. If the selection exceeds sats_available, ask the user to choose fewer domains or add more funds.")
-        } else {
-            None
-        }
-    }
-
-    pub fn present_domains_exceed_available_balance(&self) -> bool {
-        self.present_estimated_price() > self.sats_available
-    }
+    pub domain_readiness_list: Vec<DomainReadiness>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,7 +127,7 @@ pub struct ScanProjectRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct FullReviewEstimatesRequest {}
+pub struct FullReviewReadinessRequest {}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct FullReviewRequest {}
@@ -219,7 +192,6 @@ pub struct InvalidateCacheRequest {}
 pub struct ArchitectureReviewRequest {
     pub request_id: Uuid,
     pub context_id: Uuid,
-    pub review_mode: ReviewMode,
     pub review_purpose: ReviewPurpose,
     pub options: ReviewOptions,
     pub documents: Vec<DocumentInput>,
@@ -237,7 +209,6 @@ impl CachedArchitectureReviewRequest {
             request: ArchitectureReviewRequest {
                 request_id: Uuid::new_v4(),
                 context_id,
-                review_mode: ReviewMode::Multiple,
                 review_purpose: ReviewPurpose::Full,
                 options: ReviewOptions::full_review(),
                 documents: Vec::new(),
@@ -274,7 +245,6 @@ impl CachedArchitectureReviewRequest {
 
     pub fn request_for_review(
         &self,
-        review_mode: ReviewMode,
         review_purpose: ReviewPurpose,
         options: ReviewOptions,
         reviewed_document: Option<DocumentInput>,
@@ -282,7 +252,6 @@ impl CachedArchitectureReviewRequest {
         let mut request = self.request.clone();
 
         request.request_id = Uuid::new_v4();
-        request.review_mode = review_mode;
         request.review_purpose = review_purpose;
         request.options = options;
 
@@ -292,13 +261,6 @@ impl CachedArchitectureReviewRequest {
 
         request
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ReviewMode {
-    Single,
-    Multiple,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

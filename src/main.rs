@@ -1,8 +1,8 @@
 // Orchestrator
 use crate::models::{
     AddContextRequest, ArchitectureContext, CachedArchitectureReviewRequest, ChangedFile,
-    ContentType, DocumentInput, DocumentTypeHint, IntermediateReviewRequest, ReviewMode,
-    ReviewOptions, ReviewPurpose, ScanProjectRequest,
+    ContentType, DocumentInput, DocumentTypeHint, IntermediateReviewRequest, ReviewOptions,
+    ReviewPurpose, ScanProjectRequest,
 };
 use crate::scanner::documents;
 use anyhow::{Context, Result};
@@ -106,11 +106,11 @@ impl MeridianServer {
     }
 
     #[tool(
-        description = "Stage 1 of the review workflow. Build the full-review estimates. \
-            This must be called before run_full_review."
+        description = "Stage 1 of the review workflow. Build the full-review readiness. \
+            This must be called before run_full_review to ensure the more expensive full review will be successful."
     )]
-    async fn build_full_review_estimates(&self) -> String {
-        info!("build_full_review_estimates");
+    async fn build_full_review_readiness(&self) -> String {
+        info!("build_full_review_readiness");
 
         let cached = match load_cached_request() {
             Ok(cached) => cached,
@@ -119,33 +119,19 @@ impl MeridianServer {
             }
         };
 
-        let request = cached.request_for_review(
-            ReviewMode::Multiple,
-            ReviewPurpose::Full,
-            ReviewOptions::full_review(),
-            None,
-        );
+        let request =
+            cached.request_for_review(ReviewPurpose::Full, ReviewOptions::full_review(), None);
 
-        match agent::build_full_review_estimates(&request).await {
-            Ok(prompt) => {
-                info!("build_full_review_estimates: complete");
+        match agent::build_full_review_readiness(&request).await {
+            Ok(req) => {
+                info!("build_full_review_readiness: complete");
                 json!({
-                    "context_id": prompt.context_id,
-                    "status": prompt.status,
-                    "question": prompt.question,
-                    "domain_estimates": prompt.domain_estimates,
-                    "sats_available": prompt.sats_available,
-                    "total_estimated_price": prompt.total_estimated_price,
-                    "requires_user_selection": prompt.requires_user_selection,
-                    "present_estimated_price": prompt.present_estimated_price(),
-                    "present_domains_exceed_available_balance": prompt.present_domains_exceed_available_balance(),
-                    "selection_guidance": prompt.selection_guidance(),
-                    "insufficient_balance_reminder": if prompt.present_domains_exceed_available_balance() {
-                        Some("The currently present domains exceed sats_available. Ask the user to choose fewer domains or add more funds before continuing.")
-                    } else {
-                        None
-                    }
-                }).to_string()
+                    "context_id": req.context_id,
+                    "status": req.status,
+                    "question": req.question,
+                    "domain_readiness_list": req.domain_readiness_list,
+                })
+                .to_string()
             }
             Err(e) => {
                 tracing::error!("build_full_review_estimates failed: {}", e);
@@ -166,12 +152,8 @@ impl MeridianServer {
             }
         };
 
-        let request = cached.request_for_review(
-            ReviewMode::Multiple,
-            ReviewPurpose::Full,
-            ReviewOptions::full_review(),
-            None,
-        );
+        let request =
+            cached.request_for_review(ReviewPurpose::Full, ReviewOptions::full_review(), None);
 
         match agent::run_full_review(&request).await {
             Ok(findings) => {
@@ -216,7 +198,6 @@ impl MeridianServer {
             reviewed_change_set_document(changes, change_summary, changed_files);
 
         let request = cached.request_for_review(
-            ReviewMode::Single,
             ReviewPurpose::Intermediate,
             ReviewOptions::intermediate_review(),
             Some(reviewed_document),
@@ -335,10 +316,54 @@ fn scan_into_cached_request(root_dir: &str) -> Result<CachedArchitectureReviewRe
         cache::get()?.unwrap_or_else(|| CachedArchitectureReviewRequest::new(Uuid::new_v4()));
 
     cached.upsert_documents(documents);
+    synchronize_documents_into_model(&mut cached);
 
     cache::set(&cached).with_context(|| format!("failed to cache architecture review request"))?;
 
     Ok(cached)
+}
+
+fn synchronize_documents_into_model(cached: &mut CachedArchitectureReviewRequest) {
+    let model = &mut cached.request.architecture_model;
+
+    for document in &cached.request.documents {
+        let Some(filename) = document.filename.as_deref() else {
+            continue;
+        };
+
+        if matches!(
+            document.type_hint,
+            DocumentTypeHint::ArchitectureDecisionRecord
+        ) && !model
+            .global_observations
+            .adrs
+            .contains(&filename.to_string())
+        {
+            model.global_observations.adrs.push(filename.to_string());
+        }
+
+        if model
+            .evidence
+            .iter()
+            .any(|evidence| evidence.path.as_deref() == Some(filename))
+        {
+            continue;
+        }
+
+        model.evidence.push(crate::models::ArchitectureEvidence {
+            evidence_id: document.id.clone(),
+            source_type: format!("{:?}", document.type_hint),
+            path: Some(filename.to_string()),
+            description: document
+                .stated_scope
+                .clone()
+                .unwrap_or_else(|| document.title.clone()),
+            scanned_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|duration| duration.as_secs()),
+        });
+    }
 }
 
 fn scan_component_into_cached_model(root_dir: &str) -> Result<crate::models::ArchitectureModel> {
@@ -437,7 +462,7 @@ async fn run_cli(args: Vec<String>) -> Result<()> {
             }
         },
         Some("review") => match args.get(2).map(String::as_str) {
-            Some("estimate") => cli_review_estimate().await,
+            Some("readiness") => cli_review_readiness().await,
             Some("full") => cli_review_full().await,
             Some("intermediate") => {
                 let changes_file = args
@@ -521,7 +546,7 @@ fn cli_scan(roots: &[String]) -> Result<()> {
     }
 
     let any_missing_adrs = scanned.iter().any(|entry| {
-        entry["model"]["global_observations"]["adrs"]
+        entry["model"]["globalObservations"]["adrs"]
             .as_array()
             .is_some_and(|adrs| adrs.is_empty())
     });
@@ -594,8 +619,8 @@ fn multi_source_scan_workflow_guidance(any_missing_adrs: bool) -> serde_json::Va
                 "meridian context template > meridian-context.json",
                 "Edit meridian-context.json with stakeholders, concerns, agreed decisions, constraints, risks, standards, scope notes, and non-functional requirements.",
                 "meridian context add meridian-context.json",
-                "meridian review estimate",
-                "meridian review full"
+                "meridian-mcp review readiness",
+                "meridian-mcp review full"
             ],
             "multi_source_note": "Each scanned root is cached independently. The backend remains responsible for deciding how roots relate to one architecture context, review scope, and full-review baseline.",
             "context_to_collect": [
@@ -618,7 +643,7 @@ fn multi_source_scan_workflow_guidance(any_missing_adrs: bool) -> serde_json::Va
             "next_step": "full_review",
             "message": "Scanned source roots were cached independently. You can now prepare a full review with the backend.",
             "recommended_commands": [
-                "meridian-mcp review estimate",
+                "meridian-mcp review readiness",
                 "meridian-mcp review full"
             ],
             "after_successful_full_review": [
@@ -629,17 +654,13 @@ fn multi_source_scan_workflow_guidance(any_missing_adrs: bool) -> serde_json::Va
     }
 }
 
-async fn cli_review_estimate() -> Result<()> {
+async fn cli_review_readiness() -> Result<()> {
     let cached = load_cached_request()?;
 
-    let request = cached.request_for_review(
-        ReviewMode::Multiple,
-        ReviewPurpose::Full,
-        ReviewOptions::full_review(),
-        None,
-    );
+    let request =
+        cached.request_for_review(ReviewPurpose::Full, ReviewOptions::full_review(), None);
 
-    let resp = agent::build_full_review_estimates(&request).await?;
+    let resp = agent::build_full_review_readiness(&request).await?;
 
     println!(
         "{}",
@@ -647,18 +668,7 @@ async fn cli_review_estimate() -> Result<()> {
             "context_id": resp.context_id,
             "status": resp.status,
             "question": resp.question,
-            "domain_estimates": resp.domain_estimates,
-            "sats_available": resp.sats_available,
-            "total_estimated_price": resp.total_estimated_price,
-            "requires_user_selection": resp.requires_user_selection,
-            "present_estimated_price": resp.present_estimated_price(),
-            "present_domains_exceed_available_balance": resp.present_domains_exceed_available_balance(),
-            "selection_guidance": resp.selection_guidance(),
-            "insufficient_balance_reminder": if resp.present_domains_exceed_available_balance() {
-                Some("The currently present domains exceed sats_available. Choose fewer domains or add more funds before continuing.")
-            } else {
-                None
-            }
+            "domain_readiness_list": resp.domain_readiness_list,
         }))?
     );
 
@@ -668,12 +678,8 @@ async fn cli_review_estimate() -> Result<()> {
 async fn cli_review_full() -> Result<()> {
     let cached = load_or_scan_request()?;
 
-    let request = cached.request_for_review(
-        ReviewMode::Multiple,
-        ReviewPurpose::Full,
-        ReviewOptions::full_review(),
-        None,
-    );
+    let request =
+        cached.request_for_review(ReviewPurpose::Full, ReviewOptions::full_review(), None);
 
     let findings = agent::run_full_review(&request).await?;
 
@@ -705,7 +711,6 @@ async fn cli_review_intermediate(changes_file: &str) -> Result<()> {
     );
 
     let request = cached.request_for_review(
-        ReviewMode::Single,
         ReviewPurpose::Intermediate,
         ReviewOptions::intermediate_review(),
         Some(reviewed_document),
@@ -748,8 +753,8 @@ fn cli_review_guidance() -> Result<()> {
                 },
                 {
                     "step": 4,
-                    "command": format!("meridian-mcp review estimate"),
-                    "purpose": "Ask the backend for full-review preparation guidance, domain estimates, missing context, or selection prompts."
+                    "command": format!("meridian-mcp review readiness"),
+                    "purpose": "Ask the backend for full-review preparation guidance and/or missing context."
                 },
                 {
                     "step": 5,
@@ -853,7 +858,7 @@ async fn cli_context_add(file_path: &str) -> Result<()> {
             "context_percent_used": response.context_percent_used,
             "message": response.message,
             "next_steps": [
-                "meridian-mcp review estimate",
+                "meridian-mcp review readiness",
                 "meridian-mcp review full",
                 "After a successful full review, use: meridian-mcp review intermediate <changes_file>"
             ]
@@ -1002,7 +1007,7 @@ Usage:
   meridian-mcp context template
   meridian-mcp context add <json_file>
   meridian-mcp review
-  meridian-mcp review estimate
+  meridian-mcp review readiness
   meridian-mcp review full
   meridian-mcp review intermediate <changes_file>
   meridian-mcp cache clear
@@ -1057,7 +1062,7 @@ Recommended review workflow:
        meridian-mcp context add meridian-context.json
 
     4. Prepare and run a full review:
-       meridian-mcp review estimate
+       meridian-mcp review readiness
        meridian-mcp review full
 
     5. After a successful full review establishes a backend baseline:

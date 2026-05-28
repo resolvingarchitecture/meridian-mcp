@@ -1,6 +1,6 @@
 // Transport Logic
 use crate::models::{
-    ArchitectureContext, ArchitectureReviewEstimates, ArchitectureReviewRequest, AuthNResult,
+    ArchitectureContext, ArchitectureReviewReadiness, ArchitectureReviewRequest, AuthNResult,
     ContextResponse, Finding, HealthHeartbeat,
 };
 use anyhow::{Context, Result};
@@ -19,7 +19,7 @@ const SESSION_REFRESH: &str = "/api/security/session/refresh";
 const LOGOUT_PATH: &str = "/api/security/logout";
 const HEALTH_HEARTBEAT_PATH: &str = "/api/health/heartbeat";
 const CONTEXT_PATH: &str = "/api/context";
-const FULL_REVIEW_ESTIMATES_PATH: &str = "/api/skills/review/full/estimate";
+const FULL_REVIEW_READINESS_PATH: &str = "/api/skills/review/full/readiness";
 const FULL_REVIEW_PATH: &str = "/api/skills/review/full";
 const INTERMEDIATE_REVIEW_PATH: &str = "/api/skills/review/intermediate";
 const SESSION_EXPIRY_SAFETY_MARGIN_MILLIS: u64 = 30_000;
@@ -343,9 +343,9 @@ async fn parse_review_response(response: reqwest::Response) -> Result<Vec<Findin
     }
 }
 
-async fn parse_estimates_response(
+async fn parse_readiness_response(
     response: reqwest::Response,
-) -> Result<ArchitectureReviewEstimates> {
+) -> Result<ArchitectureReviewReadiness> {
     match response.status() {
         s if s.is_success() => response
             .json()
@@ -443,11 +443,11 @@ pub async fn add_context(context: ArchitectureContext) -> Result<ContextResponse
 /// Stage 1: build the full-review prompt.
 ///
 /// This must be called before requesting a full review.
-pub async fn build_full_review_estimates(
+pub async fn build_full_review_readiness(
     request: &ArchitectureReviewRequest,
-) -> Result<ArchitectureReviewEstimates> {
-    let response = post_review_stage(FULL_REVIEW_ESTIMATES_PATH, request).await?;
-    parse_estimates_response(response).await
+) -> Result<ArchitectureReviewReadiness> {
+    let response = post_review_stage(FULL_REVIEW_READINESS_PATH, request).await?;
+    parse_readiness_response(response).await
 }
 
 /// Stage 2: execute a full review.
