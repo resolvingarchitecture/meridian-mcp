@@ -1,6 +1,6 @@
 [package]
 name        = "meridian-mcp"
-version     = "0.1.1"
+version     = "0.2.0"
 edition     = "2021"
 build       = "build.rs"
 description = "Meridian MCP — local architecture review MCP server and CLI"
@@ -56,3 +56,4 @@ sha2            = "0.10"        # directory structure hashing for cache keys
 hex             = "0.4"
 tracing         = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+urlencoding     = "2"

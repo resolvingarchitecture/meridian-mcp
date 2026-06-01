@@ -51,6 +51,19 @@ pub fn set_api_key(api_key: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn clear_api_key() -> Result<()> {
+    let mut config = load().unwrap_or_default();
+    config.api_key = None;
+
+    let path = config_path()?;
+    let bytes = serde_json::to_vec_pretty(&config)?;
+
+    fs::write(&path, bytes)
+        .with_context(|| format!("failed to write config file: {}", path.display()))?;
+
+    Ok(())
+}
+
 pub fn set_backend_url(backend_url: &str) -> Result<()> {
     let mut config = load().unwrap_or_default();
     config.backend_url = Some(backend_url.trim_end_matches('/').to_string());

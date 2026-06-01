@@ -95,6 +95,55 @@ pub struct AuthNResult {
     pub message: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAccountRequest {
+    pub username: String,
+    pub password: String,
+    pub email: String,
+    pub phone: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestApiKeyRequest {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestBitcoinFundingRequest {
+    /// Number of sats to buy/fund into the authenticated Meridian account.
+    pub amount_sats: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BitcoinFundingStatusRequest {
+    /// Bitcoin receive address returned by request_bitcoin_funding.
+    pub address: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitcoinFundingRequestResponse {
+    pub address: String,
+    pub amount_sats: u64,
+    pub amount_usd: String,
+    pub exchange_rate: String,
+    pub expires_at: u64,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitcoinFundingStatusResponse {
+    pub address: String,
+    pub status: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ComplexityModifier {

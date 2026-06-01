@@ -1,8 +1,9 @@
 // Orchestrator
 use crate::models::{
-    AddContextRequest, ArchitectureContext, CachedArchitectureReviewRequest, ChangedFile,
-    ContentType, DocumentInput, DocumentTypeHint, IntermediateReviewRequest, ReviewOptions,
-    ReviewPurpose, ScanProjectRequest,
+    AddContextRequest, ArchitectureContext, BitcoinFundingStatusRequest,
+    CachedArchitectureReviewRequest, ChangedFile, ContentType, CreateAccountRequest, DocumentInput,
+    DocumentTypeHint, IntermediateReviewRequest, RequestApiKeyRequest,
+    RequestBitcoinFundingRequest, ReviewOptions, ReviewPurpose, ScanProjectRequest,
 };
 use crate::scanner::documents;
 use anyhow::{Context, Result};
@@ -26,6 +27,116 @@ struct MeridianServer;
 
 #[tool(tool_box)]
 impl MeridianServer {
+    #[tool(
+        description = "Create a Meridian account using the backend API. After this succeeds, call request_api_key once to generate and save an API key for MCP review tools."
+    )]
+    async fn create_account(&self, Parameters(req): Parameters<CreateAccountRequest>) -> String {
+        info!("create_account");
+
+        match agent::create_account(req).await {
+            Ok(_) => {
+                info!("create_account: complete");
+                json!({
+                    "status": "ok",
+                    "message": "account created",
+                    "nextStep": "Call request_api_key once with the same username and password to generate and save an API key."
+                })
+                .to_string()
+            }
+            Err(e) => {
+                tracing::error!("create_account failed: {}", e);
+                json!({ "error": e.to_string() }).to_string()
+            }
+        }
+    }
+
+    #[tool(
+        description = "Login internally with username/password, request a one-time Meridian API key from the backend, and save it to local Meridian config. This should only be called again if the original API key becomes inactive."
+    )]
+    async fn request_api_key(&self, Parameters(req): Parameters<RequestApiKeyRequest>) -> String {
+        info!("request_api_key");
+
+        match agent::request_and_save_api_key(req).await {
+            Ok(raw_api_key) => {
+                info!("request_api_key: complete");
+                json!({
+                    "status": "ok",
+                    "message": "API key generated and saved",
+                    "apiKey": raw_api_key,
+                    "configFile": config::config_file_display_path(),
+                    "warning": "This raw API key is shown once. Store it securely if you need a separate copy. Do not call request_api_key again unless this key becomes inactive."
+                })
+                .to_string()
+            }
+            Err(e) => {
+                tracing::error!("request_api_key failed: {}", e);
+                json!({ "error": e.to_string() }).to_string()
+            }
+        }
+    }
+
+    #[tool(
+        description = "Create a Bitcoin funding request for the authenticated Meridian account. Returns a fresh Bitcoin receive address, sats amount, USD estimate, exchange rate, expiration time, and status. The user should send exactly amountSats to the returned address before expiresAt."
+    )]
+    async fn request_bitcoin_funding(
+        &self,
+        Parameters(req): Parameters<RequestBitcoinFundingRequest>,
+    ) -> String {
+        info!("request_bitcoin_funding: amount_sats={}", req.amount_sats);
+
+        match agent::request_bitcoin_funding(req.amount_sats).await {
+            Ok(payment_request) => {
+                info!(
+                    "request_bitcoin_funding: complete — address={}",
+                    payment_request.address
+                );
+                json!({
+                    "status": "ok",
+                    "message": "Bitcoin funding request created",
+                    "payment": payment_request,
+                    "instructions": [
+                        "Send exactly the requested amountSats to the returned Bitcoin address before expiresAt.",
+                        "After broadcasting the transaction, call bitcoin_funding_status with the returned address to check confirmation status.",
+                        "Sats are credited after the backend confirms the Bitcoin payment according to its confirmation policy."
+                    ]
+                })
+                .to_string()
+            }
+            Err(e) => {
+                tracing::error!("request_bitcoin_funding failed: {}", e);
+                json!({ "error": e.to_string() }).to_string()
+            }
+        }
+    }
+
+    #[tool(
+        description = "Check the status of a Bitcoin funding request by receive address. Use the address returned from request_bitcoin_funding."
+    )]
+    async fn bitcoin_funding_status(
+        &self,
+        Parameters(req): Parameters<BitcoinFundingStatusRequest>,
+    ) -> String {
+        info!("bitcoin_funding_status: address={}", req.address);
+
+        match agent::bitcoin_funding_status(&req.address).await {
+            Ok(status) => {
+                info!(
+                    "bitcoin_funding_status: complete — status={}",
+                    status.status
+                );
+                json!({
+                    "status": "ok",
+                    "payment": status
+                })
+                .to_string()
+            }
+            Err(e) => {
+                tracing::error!("bitcoin_funding_status failed: {}", e);
+                json!({ "error": e.to_string() }).to_string()
+            }
+        }
+    }
+
     #[tool(
         description = "Add persistent architecture context to the Meridian backend. \
             Returns a context_id that can be included in subsequent reviews."
@@ -461,6 +572,56 @@ async fn run_cli(args: Vec<String>) -> Result<()> {
                 anyhow::bail!("usage: meridian components list");
             }
         },
+        Some("account") => match args.get(2).map(String::as_str) {
+            Some("create") => {
+                let username = args.get(3).context(
+                    "usage: meridian account create <username> <password> [email] [phone]",
+                )?;
+                let password = args.get(4).context(
+                    "usage: meridian account create <username> <password> [email] [phone]",
+                )?;
+                let email = args.get(5).cloned().unwrap_or_default();
+                let phone = args.get(6).cloned().unwrap_or_default();
+
+                cli_create_account(username, password, &email, &phone).await
+            }
+            Some("request-api-key") => {
+                let username = args
+                    .get(3)
+                    .context("usage: meridian account request-api-key <username> <password>")?;
+                let password = args
+                    .get(4)
+                    .context("usage: meridian account request-api-key <username> <password>")?;
+
+                cli_request_api_key(username, password).await
+            }
+            _ => {
+                anyhow::bail!(
+                    "usage: meridian account create <username> <password> [email] [phone]\n       meridian account request-api-key <username> <password>"
+                );
+            }
+        },
+        Some("fund") => match args.get(2).map(String::as_str) {
+            Some("bitcoin") => match args.get(3).map(String::as_str) {
+                Some("status") => {
+                    let address = args
+                        .get(4)
+                        .context("usage: meridian fund bitcoin status <address>")?;
+                    cli_bitcoin_funding_status(address).await
+                }
+                Some(amount_sats) => cli_request_bitcoin_funding(amount_sats).await,
+                None => {
+                    anyhow::bail!(
+                        "usage: meridian fund bitcoin <amount_sats>\n       meridian fund bitcoin status <address>"
+                    );
+                }
+            },
+            _ => {
+                anyhow::bail!(
+                    "usage: meridian fund bitcoin <amount_sats>\n       meridian fund bitcoin status <address>"
+                );
+            }
+        },
         Some("review") => match args.get(2).map(String::as_str) {
             Some("readiness") => cli_review_readiness().await,
             Some("full") => cli_review_full().await,
@@ -604,6 +765,103 @@ fn cli_components_list() -> Result<()> {
                     })
                 })
                 .collect::<Vec<_>>()
+        }))?
+    );
+
+    Ok(())
+}
+
+async fn cli_create_account(
+    username: &str,
+    password: &str,
+    email: &str,
+    phone: &str,
+) -> Result<()> {
+    agent::create_account(CreateAccountRequest {
+        username: username.to_string(),
+        password: password.to_string(),
+        email: email.to_string(),
+        phone: phone.to_string(),
+    })
+    .await?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": "ok",
+            "message": "account created",
+            "next_steps": [
+                "Run: meridian-mcp account request-api-key <username> <password>",
+                "After the API key is generated and saved, authenticated CLI commands can use it automatically."
+            ]
+        }))?
+    );
+
+    Ok(())
+}
+
+async fn cli_request_api_key(username: &str, password: &str) -> Result<()> {
+    let raw_api_key = agent::request_and_save_api_key(RequestApiKeyRequest {
+        username: username.to_string(),
+        password: password.to_string(),
+    })
+    .await?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": "ok",
+            "message": "API key generated and saved",
+            "apiKey": raw_api_key,
+            "configFile": config::config_file_display_path(),
+            "warning": "This raw API key is shown once. Store it securely if you need a separate copy. Do not run request-api-key again unless this key becomes inactive.",
+            "next_steps": [
+                "Run: meridian-mcp login",
+                "Optionally fund the account: meridian-mcp fund bitcoin <amount_sats>",
+                "Then run review commands normally."
+            ]
+        }))?
+    );
+
+    Ok(())
+}
+
+async fn cli_request_bitcoin_funding(amount_sats: &str) -> Result<()> {
+    let amount_sats = amount_sats
+        .parse::<u64>()
+        .with_context(|| format!("amount_sats must be a positive integer: {amount_sats}"))?;
+
+    if amount_sats == 0 {
+        anyhow::bail!("amount_sats must be greater than zero");
+    }
+
+    let payment_request = agent::request_bitcoin_funding(amount_sats).await?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": "ok",
+            "message": "Bitcoin funding request created",
+            "payment": payment_request,
+            "instructions": [
+                "Send exactly the requested amountSats to the returned Bitcoin address before expiresAt.",
+                "After broadcasting the transaction, run: meridian-mcp fund bitcoin status <address>",
+                "Sats are credited after the backend confirms the Bitcoin payment according to its confirmation policy."
+            ]
+        }))?
+    );
+
+    Ok(())
+}
+
+async fn cli_bitcoin_funding_status(address: &str) -> Result<()> {
+    let status = agent::bitcoin_funding_status(address).await?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": "ok",
+            "payment": status
         }))?
     );
 
@@ -1004,8 +1262,12 @@ Usage:
   meridian-mcp mcp
   meridian-mcp scan [root_dir...]
   meridian-mcp components list
+  meridian-mcp account create <username> <password> [email] [phone]
+  meridian-mcp account request-api-key <username> <password>
   meridian-mcp context template
   meridian-mcp context add <json_file>
+  meridian-mcp fund bitcoin <amount_sats>
+  meridian-mcp fund bitcoin status <address>
   meridian-mcp review
   meridian-mcp review readiness
   meridian-mcp review full
@@ -1020,25 +1282,100 @@ Usage:
   meridian-mcp version
   meridian-mcp help
 
-Recommended Setup:
-    1. Login to Meridian site and create an api-key. Remember to copy it before leaving page as it can longer be restored. It starts with m_live_.
-    2. Set api-key in config:
+MCP account setup tools:
+  create_account
+      Create a Meridian account using username, password, email (optional), and phone (optional).
+
+  request_api_key
+      Login internally with username and password, request a one-time Meridian API key,
+      and save it to local Meridian config for review tools.
+
+      Call this once after account creation. Only call it again if the original
+      API key becomes inactive.
+
+CLI account setup commands:
+  meridian-mcp account create <username> <password> [email] [phone]
+      Create a Meridian account using the backend API.
+      Username and password are required.
+      Email and phone are optional.
+
+  meridian-mcp account request-api-key <username> <password>
+      Login with username/password, request a one-time Meridian API key,
+      and save it to local Meridian config.
+
+      Call this once after account creation. Only call it again if the original
+      API key becomes inactive.
+
+MCP account funding tools:
+  request_bitcoin_funding
+      Create a Bitcoin payment request for the authenticated account.
+      Input: amountSats.
+      Returns a fresh Bitcoin receive address, amount, USD estimate,
+      exchange rate, expiration time, and status.
+
+  bitcoin_funding_status
+      Check the status of a Bitcoin funding request by receive address.
+
+CLI account funding commands:
+  meridian-mcp fund bitcoin <amount_sats>
+      Create a Bitcoin payment request for the authenticated account.
+      Returns a fresh Bitcoin receive address, amount, USD estimate,
+      exchange rate, expiration time, and status.
+
+  meridian-mcp fund bitcoin status <address>
+      Check the status of a Bitcoin funding request by receive address.
+
+Recommended Setup for MCP agents:
+    1. Start the MCP server:
+        meridian-mcp mcp
+
+    2. If the user does not already have a Meridian account, call:
+        create_account
+
+    3. Then call:
+        request_api_key
+
+       This generates the user's API key and saves it locally. The key starts
+       with m_live_ and is shown once.
+
+    4. After request_api_key succeeds, review tools will authenticate automatically.
+
+Recommended Setup for CLI users:
+    1. If you do not already have a Meridian account, create one:
+        meridian-mcp account create <username> <password> [email] [phone]
+
+    2. Request and save a local API key:
+        meridian-mcp account request-api-key <username> <password>
+
+       This generates the user's API key and saves it locally. The key starts
+       with m_live_ and is shown once.
+
+    3. If you already have an API key, set it in local config instead:
         meridian-mcp config set api-key m_live_restofkeyhere
-    3. Test backend access:
+
+    4. Test backend access:
         meridian-mcp test backend
         Returns: {{
                    "status": "UP|DOWN",
                    "timestamp": "date-time-here"
                  }}
-    4. Test backend authentication:
+
+    5. Test backend authentication:
         meridian-mcp login
         Returns: {{
                    "sessionId": "ID-here",
-                   "expiresAt": 30-minutes-ahead-in-epoch-time-here,
+                   "expiresAt": 30-minutes-ahead-in-epoch-time-here",
                    "status": 200,
                    "message": "Login successful"
                  }}
 
+    6. Fund the account with Bitcoin:
+        meridian-mcp fund bitcoin 100000
+
+        Send the Bitcoin to the address returned.
+
+       Then check payment status:
+        meridian-mcp fund bitcoin status bc1...
 
 Recommended review workflow:
     1. Scan one or more architecture-significant source roots:
@@ -1099,9 +1436,10 @@ async fn run_mcp_server() -> Result<()> {
         eprintln!(
             "ERROR: MERIDIAN_API_KEY environment variable not set and no local API key configured."
         );
-        eprintln!("Run: meridian config set api-key <key>");
-        eprintln!("Get your API key at https://resolvingarchitecture.io/meridian");
-        std::process::exit(1);
+        eprintln!("Account setup tools are still available.");
+        eprintln!(
+            "To enable review tools, call create_account if needed, then request_api_key once."
+        );
     }
 
     let server = MeridianServer;
