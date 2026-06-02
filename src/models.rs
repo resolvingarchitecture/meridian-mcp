@@ -16,6 +16,27 @@ pub struct ArchitectureContext {
     pub freeform_notes: Option<String>,
 }
 
+impl ArchitectureContext {
+    pub fn new() -> Self {
+        Self::new_with_context_id(Uuid::new_v4())
+    }
+
+    pub fn new_with_context_id(context_id: Uuid) -> Self {
+        Self {
+            context_id: Some(context_id),
+            organization_context: None,
+            business_goals: None,
+            stakeholders: None,
+            decisions: None,
+            constraints: None,
+            risks: None,
+            standards: None,
+            scope_notes: None,
+            freeform_notes: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextResponse {
@@ -78,6 +99,7 @@ pub struct ArchitectureReviewReadiness {
     pub status: String,
     pub question: String,
     pub domain_readiness_list: Vec<DomainReadiness>,
+    pub architecture_context: Option<ArchitectureContext>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -451,6 +473,7 @@ pub type ArchModel = ArchitectureModel;
 #[serde(rename_all = "camelCase")]
 pub struct ArchitectureModel {
     pub context_id: Option<Uuid>,
+    pub context: ArchitectureContext,
     pub components: Vec<ArchitectureComponent>,
     pub relationships: Vec<ArchitectureRelationship>,
     pub global_observations: ArchitectureObservations,
@@ -466,6 +489,7 @@ impl ArchitectureModel {
     pub fn new_with_context_id(context_id: Uuid) -> Self {
         Self {
             context_id: Some(context_id),
+            context: ArchitectureContext::new_with_context_id(context_id),
             components: Vec::new(),
             relationships: Vec::new(),
             global_observations: ArchitectureObservations::default(),

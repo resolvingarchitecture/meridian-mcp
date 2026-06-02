@@ -1,9 +1,10 @@
 // Orchestrator
 use crate::models::{
-    AddContextRequest, ArchitectureContext, BitcoinFundingStatusRequest,
-    CachedArchitectureReviewRequest, ChangedFile, ContentType, CreateAccountRequest, DocumentInput,
-    DocumentTypeHint, IntermediateReviewRequest, RequestApiKeyRequest,
-    RequestBitcoinFundingRequest, ReviewOptions, ReviewPurpose, ScanProjectRequest,
+    AddContextRequest, ArchitectureContext, ArchitectureReviewReadiness,
+    BitcoinFundingStatusRequest, CachedArchitectureReviewRequest, ChangedFile, ContentType,
+    CreateAccountRequest, DocumentInput, DocumentTypeHint, IntermediateReviewRequest,
+    RequestApiKeyRequest, RequestBitcoinFundingRequest, ReviewOptions, ReviewPurpose,
+    ScanProjectRequest,
 };
 use crate::scanner::documents;
 use anyhow::{Context, Result};
@@ -138,51 +139,6 @@ impl MeridianServer {
     }
 
     #[tool(
-        description = "Add persistent architecture context to the Meridian backend. \
-            Returns a context_id that can be included in subsequent reviews."
-    )]
-    async fn add_context(&self, Parameters(req): Parameters<AddContextRequest>) -> String {
-        info!("add_context");
-
-        let context_id = match resolve_context_id_for_current_model(req.context_id) {
-            Ok(context_id) => context_id,
-            Err(e) => {
-                tracing::error!("add_context failed resolving context_id: {}", e);
-                return json!({ "error": e.to_string() }).to_string();
-            }
-        };
-
-        let context = ArchitectureContext {
-            context_id: Some(context_id),
-            organization_context: req.organization_context,
-            business_goals: req.business_goals,
-            stakeholders: req.stakeholders,
-            decisions: req.decisions,
-            constraints: req.constraints,
-            risks: req.risks,
-            standards: req.standards,
-            scope_notes: req.scope_notes,
-            freeform_notes: req.freeform_notes,
-        };
-
-        match agent::add_context(context).await {
-            Ok(response) => {
-                info!("add_context: complete — context_id={}", response.context_id);
-                json!({
-                    "context_id": response.context_id,
-                    "context_percent_used": response.context_percent_used,
-                    "message": response.message
-                })
-                .to_string()
-            }
-            Err(e) => {
-                tracing::error!("add_context failed: {}", e);
-                json!({ "error": e.to_string() }).to_string()
-            }
-        }
-    }
-
-    #[tool(
         description = "Scan a Meridian project directory and populate the cached architecture review request with discovered documents. \
         Call this once when opening a project. The request template is cached automatically."
     )]
@@ -235,12 +191,17 @@ impl MeridianServer {
 
         match agent::build_full_review_readiness(&request).await {
             Ok(req) => {
+                if let Err(e) = persist_readiness_context(&req) {
+                    tracing::warn!("failed to cache readiness architecture context: {}", e);
+                }
+
                 info!("build_full_review_readiness: complete");
                 json!({
                     "context_id": req.context_id,
                     "status": req.status,
                     "question": req.question,
                     "domain_readiness_list": req.domain_readiness_list,
+                    "architecture_context": req.architecture_context,
                 })
                 .to_string()
             }
@@ -482,24 +443,43 @@ fn scan_component_into_cached_model(root_dir: &str) -> Result<crate::models::Arc
     Ok(cached.request.architecture_model)
 }
 
-fn resolve_context_id_for_current_model(requested_context_id: Option<Uuid>) -> Result<Uuid> {
-    let context_id = match cache::get()? {
-        Some(mut cached) => {
-            let existing_context_id = cached.request.context_id;
-            if let Some(requested_context_id) = requested_context_id {
-                cached.request.context_id = requested_context_id;
-                cached.request.architecture_model.context_id = Some(requested_context_id);
-                cache::set(&cached)
-                    .with_context(|| format!("failed to cache context_id for review request"))?;
-                requested_context_id
-            } else {
-                existing_context_id
-            }
-        }
-        None => requested_context_id.unwrap_or_else(Uuid::new_v4),
+fn add_context_to_cached_model(
+    mut context: ArchitectureContext,
+) -> Result<CachedArchitectureReviewRequest> {
+    let mut cached =
+        cache::get()?.unwrap_or_else(|| CachedArchitectureReviewRequest::new(Uuid::new_v4()));
+
+    let context_id = context.context_id.unwrap_or(cached.request.context_id);
+    context.context_id = Some(context_id);
+
+    cached.request.context_id = context_id;
+    cached.request.architecture_model.context_id = Some(context_id);
+    cached.request.architecture_model.context = context;
+
+    cache::set(&cached).with_context(|| format!("failed to cache architecture context"))?;
+
+    Ok(cached)
+}
+
+fn persist_readiness_context(readiness: &ArchitectureReviewReadiness) -> Result<()> {
+    let Some(context) = readiness.architecture_context.clone() else {
+        return Ok(());
     };
 
-    Ok(context_id)
+    let mut cached = load_cached_request()?;
+
+    if let Some(context_id) = context.context_id {
+        cached.request.context_id = context_id;
+        cached.request.architecture_model.context_id = Some(context_id);
+    }
+
+    cached.request.architecture_model.context = context;
+
+    cache::set(&cached).with_context(|| {
+        format!("failed to cache architecture context returned by review readiness")
+    })?;
+
+    Ok(())
 }
 
 fn reviewed_change_set_document(
@@ -920,6 +900,8 @@ async fn cli_review_readiness() -> Result<()> {
 
     let resp = agent::build_full_review_readiness(&request).await?;
 
+    persist_readiness_context(&resp)?;
+
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
@@ -927,6 +909,7 @@ async fn cli_review_readiness() -> Result<()> {
             "status": resp.status,
             "question": resp.question,
             "domain_readiness_list": resp.domain_readiness_list,
+            "architecture_context": resp.architecture_context,
         }))?
     );
 
@@ -1101,20 +1084,17 @@ async fn cli_context_add(file_path: &str) -> Result<()> {
     let content = std::fs::read_to_string(file_path)
         .with_context(|| format!("failed to read context file: {file_path}"))?;
 
-    let mut context: ArchitectureContext = serde_json::from_str(&content)
+    let context: ArchitectureContext = serde_json::from_str(&content)
         .with_context(|| format!("failed to parse context JSON: {file_path}"))?;
 
-    context.context_id = Some(resolve_context_id_for_current_model(context.context_id)?);
-
-    let response = agent::add_context(context).await?;
+    let cached = add_context_to_cached_model(context)?;
 
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
             "status": "ok",
-            "context_id": response.context_id,
-            "context_percent_used": response.context_percent_used,
-            "message": response.message,
+            "context_id": cached.request.context_id,
+            "message": "architecture context added to cached ArchitectureModel",
             "next_steps": [
                 "meridian-mcp review readiness",
                 "meridian-mcp review full",

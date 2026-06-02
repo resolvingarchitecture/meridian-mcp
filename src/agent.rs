@@ -1,8 +1,8 @@
 // Transport Logic
 use crate::models::{
-    ArchitectureContext, ArchitectureReviewReadiness, ArchitectureReviewRequest, AuthNResult,
-    BitcoinFundingRequestResponse, BitcoinFundingStatusResponse, ContextResponse,
-    CreateAccountRequest, Finding, HealthHeartbeat, RequestApiKeyRequest,
+    ArchitectureReviewReadiness, ArchitectureReviewRequest, AuthNResult,
+    BitcoinFundingRequestResponse, BitcoinFundingStatusResponse, CreateAccountRequest, Finding,
+    HealthHeartbeat, RequestApiKeyRequest,
 };
 use anyhow::{Context, Result};
 use reqwest::Client;
@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
-use uuid::Uuid;
 
 static CLIENT: OnceLock<Client> = OnceLock::new();
 static SESSION: OnceLock<Arc<Mutex<Option<Session>>>> = OnceLock::new();
@@ -23,7 +22,6 @@ const API_KEY_PATH: &str = "/api/user/apiKey";
 const HEALTH_HEARTBEAT_PATH: &str = "/api/health/heartbeat";
 const BITCOIN_PAYMENT_REQUEST_PATH: &str = "/api/payment/request/bitcoin";
 const BITCOIN_PAYMENT_STATUS_PATH: &str = "/api/payment/request/bitcoin/status";
-const CONTEXT_PATH: &str = "/api/context";
 const FULL_REVIEW_READINESS_PATH: &str = "/api/skills/review/full/readiness";
 const FULL_REVIEW_PATH: &str = "/api/skills/review/full";
 const INTERMEDIATE_REVIEW_PATH: &str = "/api/skills/review/intermediate";
@@ -39,13 +37,6 @@ struct AuthNRequest {
     phone: Option<String>,
     email: Option<String>,
     password: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ContentEnrichmentRequest {
-    #[serde(rename = "requestId")]
-    request_id: Uuid,
-    context: ArchitectureContext,
 }
 
 #[derive(Deserialize)]
@@ -457,21 +448,6 @@ async fn send_backend_request(
         .context("failed to reach backend")
 }
 
-async fn send_context_request(
-    url: &str,
-    session_id: &str,
-    body: &ContentEnrichmentRequest,
-) -> Result<reqwest::Response> {
-    let bearer_token = session_bearer_token(session_id);
-    http()
-        .post(url)
-        .bearer_auth(bearer_token)
-        .json(body)
-        .send()
-        .await
-        .context("failed to reach backend context endpoint")
-}
-
 async fn send_authenticated_get(url: &str, session_id: &str) -> Result<reqwest::Response> {
     let bearer_token = session_bearer_token(session_id);
     http()
@@ -493,24 +469,6 @@ async fn authenticated_get(url: &str) -> Result<reqwest::Response> {
         invalidate_session().await;
         current_session_id = login(&api_key, &backend_url).await?;
         response = send_authenticated_get(url, &current_session_id).await?;
-    }
-
-    Ok(response)
-}
-
-async fn post_context(body: &ContentEnrichmentRequest) -> Result<reqwest::Response> {
-    let api_key = crate::config::api_key()?;
-    let backend_url = crate::config::backend_url()?;
-
-    let url = format!("{backend_url}{CONTEXT_PATH}");
-
-    let mut current_session_id = session_id(&api_key, &backend_url).await?;
-    let mut response = send_context_request(&url, &current_session_id, body).await?;
-
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-        invalidate_session().await;
-        current_session_id = login(&api_key, &backend_url).await?;
-        response = send_context_request(&url, &current_session_id, body).await?;
     }
 
     Ok(response)
@@ -586,31 +544,6 @@ async fn parse_readiness_response(
     }
 }
 
-async fn parse_context_response(response: reqwest::Response) -> Result<ContextResponse> {
-    match response.status() {
-        s if s.is_success() => response
-            .json()
-            .await
-            .context("failed to parse backend context response"),
-        reqwest::StatusCode::UNAUTHORIZED => {
-            invalidate_session().await;
-            anyhow::bail!("backend session expired or was rejected after re-login")
-        }
-        reqwest::StatusCode::PAYMENT_REQUIRED => {
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("insufficient sats to add context: {body}")
-        }
-        reqwest::StatusCode::PAYLOAD_TOO_LARGE => {
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("context exceeds maximum size: {body}")
-        }
-        status => {
-            let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("backend context error {status}: {body}")
-        }
-    }
-}
-
 /// Test backend reachability using the unsecured health heartbeat endpoint.
 pub async fn test_backend_health() -> Result<HealthHeartbeat> {
     let backend_url = crate::config::backend_url()?;
@@ -644,19 +577,6 @@ pub async fn test_login() -> Result<AuthNResult> {
     let backend_url = crate::config::backend_url()?;
 
     login_result(&api_key, &backend_url).await
-}
-
-/// Add persistent architecture context to the backend.
-///
-/// The returned context_id can be included in subsequent review requests.
-pub async fn add_context(context: ArchitectureContext) -> Result<ContextResponse> {
-    let body = ContentEnrichmentRequest {
-        request_id: Uuid::new_v4(),
-        context,
-    };
-
-    let response = post_context(&body).await?;
-    parse_context_response(response).await
 }
 
 /// Stage 1: build the full-review readiness.
