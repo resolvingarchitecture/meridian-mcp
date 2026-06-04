@@ -37,14 +37,6 @@ impl ArchitectureContext {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContextResponse {
-    pub context_id: Uuid,
-    pub context_percent_used: serde_json::Value,
-    pub message: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Finding {
@@ -64,6 +56,8 @@ pub struct Finding {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DomainReadiness {
+    pub rubric: String,
+    pub detected: bool,
     pub domain: Domain,
     pub present: bool,
     pub estimated_num_components: i32,
@@ -198,31 +192,7 @@ pub struct ScanProjectRequest {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct FullReviewReadinessRequest {}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct FullReviewRequest {}
-
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct IntermediateReviewRequest {
-    /// Authoritative change set submitted by the IDE, agent, or CLI.
-    /// This may be a unified diff, a structured text summary, or an agent-produced
-    /// description of creates/modifies/deletes/renames.
-    ///
-    /// If omitted or blank, Meridian will attempt to collect the current Git
-    /// working tree change set from `root_dir` or the current directory.
-    pub changes: Option<String>,
-
-    /// Optional root directory used when collecting a Git change set.
-    pub root_dir: Option<String>,
-
-    /// Optional caller-provided summary of the intent or scope of the changes.
-    pub change_summary: Option<String>,
-
-    /// Optional structured list of changed files represented by `changes`.
-    pub changed_files: Option<Vec<ChangedFile>>,
-}
+pub struct ReviewRequest {}
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -263,7 +233,6 @@ pub struct InvalidateCacheRequest {}
 pub struct ArchitectureReviewRequest {
     pub request_id: Uuid,
     pub context_id: Uuid,
-    pub review_purpose: ReviewPurpose,
     pub options: ReviewOptions,
     pub documents: Vec<DocumentInput>,
     pub architecture_model: ArchitectureModel,
@@ -280,8 +249,7 @@ impl CachedArchitectureReviewRequest {
             request: ArchitectureReviewRequest {
                 request_id: Uuid::new_v4(),
                 context_id,
-                review_purpose: ReviewPurpose::Full,
-                options: ReviewOptions::full_review(),
+                options: ReviewOptions::create(),
                 documents: Vec::new(),
                 architecture_model: ArchitectureModel::new_with_context_id(context_id),
             },
@@ -316,14 +284,12 @@ impl CachedArchitectureReviewRequest {
 
     pub fn request_for_review(
         &self,
-        review_purpose: ReviewPurpose,
         options: ReviewOptions,
         reviewed_document: Option<DocumentInput>,
     ) -> ArchitectureReviewRequest {
         let mut request = self.request.clone();
 
         request.request_id = Uuid::new_v4();
-        request.review_purpose = review_purpose;
         request.options = options;
 
         if let Some(reviewed_document) = reviewed_document {
@@ -332,13 +298,6 @@ impl CachedArchitectureReviewRequest {
 
         request
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ReviewPurpose {
-    Full,
-    Intermediate,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -354,7 +313,7 @@ pub struct ReviewOptions {
 }
 
 impl ReviewOptions {
-    pub fn full_review() -> Self {
+    pub fn create() -> Self {
         Self {
             infer_stakeholders: true,
             infer_architectural_decisions: true,
@@ -370,25 +329,6 @@ impl ReviewOptions {
             components_to_review: vec![],
             minimum_confidence_threshold: 0.0,
             minimum_gap_severity: GapSeverity::Low,
-        }
-    }
-
-    pub fn intermediate_review() -> Self {
-        Self {
-            infer_stakeholders: false,
-            infer_architectural_decisions: false,
-            include_quality_attribute_ranking: false,
-            domains_to_review: vec![
-                Domain::Application,
-                Domain::Integration,
-                Domain::Data,
-                Domain::Infrastructure,
-                Domain::Security,
-                Domain::Enterprise,
-            ],
-            components_to_review: vec![],
-            minimum_confidence_threshold: 0.4,
-            minimum_gap_severity: GapSeverity::High,
         }
     }
 }

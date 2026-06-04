@@ -1,12 +1,13 @@
 // Transport Logic
 use crate::models::{
     ArchitectureReviewReadiness, ArchitectureReviewRequest, AuthNResult,
-    BitcoinFundingRequestResponse, BitcoinFundingStatusResponse, CreateAccountRequest, Finding,
+    BitcoinFundingRequestResponse, BitcoinFundingStatusResponse, CreateAccountRequest,
     HealthHeartbeat, RequestApiKeyRequest,
 };
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
@@ -22,9 +23,7 @@ const API_KEY_PATH: &str = "/api/user/apiKey";
 const HEALTH_HEARTBEAT_PATH: &str = "/api/health/heartbeat";
 const BITCOIN_PAYMENT_REQUEST_PATH: &str = "/api/payment/request/bitcoin";
 const BITCOIN_PAYMENT_STATUS_PATH: &str = "/api/payment/request/bitcoin/status";
-const FULL_REVIEW_READINESS_PATH: &str = "/api/skills/review/full/readiness";
-const FULL_REVIEW_PATH: &str = "/api/skills/review/full";
-const INTERMEDIATE_REVIEW_PATH: &str = "/api/skills/review/intermediate";
+const REVIEW_PATH: &str = "/api/skills/review";
 const SESSION_EXPIRY_SAFETY_MARGIN_MILLIS: u64 = 30_000;
 
 #[derive(Debug, Clone, Serialize)]
@@ -37,11 +36,6 @@ struct AuthNRequest {
     phone: Option<String>,
     email: Option<String>,
     password: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ReviewResponse {
-    findings: Vec<Finding>,
 }
 
 #[derive(Debug, Clone)]
@@ -495,15 +489,12 @@ async fn post_review_stage(
     Ok(response)
 }
 
-async fn parse_review_response(response: reqwest::Response) -> Result<Vec<Finding>> {
+async fn parse_review_response(response: reqwest::Response) -> Result<Value> {
     match response.status() {
-        s if s.is_success() => {
-            let data: ReviewResponse = response
-                .json()
-                .await
-                .context("failed to parse backend review response")?;
-            Ok(data.findings)
-        }
+        s if s.is_success() => response
+            .json()
+            .await
+            .context("failed to parse backend review response"),
         reqwest::StatusCode::UNAUTHORIZED => {
             invalidate_session().await;
             anyhow::bail!("backend session expired or was rejected after re-login")
@@ -579,28 +570,7 @@ pub async fn test_login() -> Result<AuthNResult> {
     login_result(&api_key, &backend_url).await
 }
 
-/// Stage 1: build the full-review readiness.
-///
-/// This must be called before requesting a full review.
-pub async fn build_full_review_readiness(
-    request: &ArchitectureReviewRequest,
-) -> Result<ArchitectureReviewReadiness> {
-    let response = post_review_stage(FULL_REVIEW_READINESS_PATH, request).await?;
-    parse_readiness_response(response).await
-}
-
-/// Stage 2: execute a full review.
-///
-/// This must be called after the full-review prompt stage.
-pub async fn run_full_review(request: &ArchitectureReviewRequest) -> Result<Vec<Finding>> {
-    let response = post_review_stage(FULL_REVIEW_PATH, request).await?;
-    parse_review_response(response).await
-}
-
-/// Stage 3: execute an intermediate review for a file change.
-///
-/// This must be called only after the full review stage has completed.
-pub async fn run_intermediate_review(request: &ArchitectureReviewRequest) -> Result<Vec<Finding>> {
-    let response = post_review_stage(INTERMEDIATE_REVIEW_PATH, request).await?;
+pub async fn run_review(request: &ArchitectureReviewRequest) -> Result<Value> {
+    let response = post_review_stage(REVIEW_PATH, request).await?;
     parse_review_response(response).await
 }
