@@ -1026,7 +1026,7 @@ fn print_version() {
 
 fn print_help() {
     println!(
-        r#"Meridian local architecture review MCP server and CLI
+        r#"Meridian architecture assistant MCP server and CLI
 
 Usage:
   meridian-mcp mcp
@@ -1039,9 +1039,6 @@ Usage:
   meridian-mcp fund bitcoin <amount_sats>
   meridian-mcp fund bitcoin status <address>
   meridian-mcp review
-  meridian-mcp review readiness
-  meridian-mcp review full
-  meridian-mcp review intermediate <changes_file>
   meridian-mcp cache clear
   meridian-mcp config set api-key <key>
   meridian-mcp config set backend-url <url>
