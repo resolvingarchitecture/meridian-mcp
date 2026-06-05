@@ -2,9 +2,8 @@
 use crate::models::{
     AddContextRequest, ArchitectureContext, ArchitectureReviewReadiness,
     BitcoinFundingStatusRequest, CachedArchitectureReviewRequest, ChangedFile, ContentType,
-    CreateAccountRequest, DocumentInput, DocumentTypeHint,
-    RequestApiKeyRequest, RequestBitcoinFundingRequest, ReviewOptions,
-    ScanProjectRequest,
+    CreateAccountRequest, DocumentInput, DocumentTypeHint, RequestApiKeyRequest,
+    RequestBitcoinFundingRequest, ReviewOptions, ScanProjectRequest,
 };
 use crate::scanner::documents;
 use anyhow::{Context, Result};
