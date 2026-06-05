@@ -742,11 +742,10 @@ fn multi_source_scan_workflow_guidance(any_missing_adrs: bool) -> serde_json::Va
             "next_step": "full_review",
             "message": "Scanned source roots were cached independently. You can now prepare a full review with the backend.",
             "recommended_commands": [
-                "meridian-mcp review readiness",
-                "meridian-mcp review full"
+                "meridian-mcp review"
             ],
             "after_successful_full_review": [
-                "meridian-mcp review intermediate <changes_file>"
+                "meridian-mcp review"
             ],
             "multi_source_note": "Meridian preserves source-root identity locally. The backend determines whether these roots belong to the same architecture context or review baseline."
         })
