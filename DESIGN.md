@@ -239,7 +239,26 @@ Terminal / developer
 
 ## Internal modules
 
-The current source layout is expected to remain centered around the local runtime:
+The current source layout is expefn harvest_architecture_significant_files(paths: &[PathBuf]) -> Vec<DocumentInput> {
+    let mut documents = Vec::new();
+
+        for path in paths {
+            if !is_architecture_significant_file_path(path) {
+                continue;
+            }
+
+
+
+        }
+}
+
+fn is_architecture_significant_file_path(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+
+    
+}cted to remain centered around the local runtime:
 
 - `main.rs`
 - `agent.rs`
@@ -622,9 +641,91 @@ It should capture:
 
 It should not try to be a complete code index.
 
-A single scanned source may create a local architecture model. Later scans may append additional structural facts or supporting context to that same model when they are associated with the same Meridian architecture context. A larger Meridian review may combine code-derived facts with user-provided architecture context and other sources of information.
+### Architecture-significant source file types
 
-The MCP client should not decide that multiple sources form one system of record. It should preserve source identity and provide scanned facts to the backend. The backend owns the interpretation of whether sources should be reviewed independently or together as part of a larger full review baseline.
+For document identification and architecture evidence discovery, `meridian-mcp` should consider a broad but curated set of source file types. These files are candidates for lightweight structural scanning, metadata extraction, or inclusion as supporting context references. The scanner should still skip generated files, vendored dependencies, build outputs, lockfiles except where explicitly useful, minified assets, and large binary artifacts unless future backend workflows require them.
+
+#### Application source file types
+
+Application source files describe executable product behavior, service boundaries, UI flows, domain logic, integration logic, tests that reveal intended behavior, and framework configuration.
+
+| Category                       | File types and names                                                                                                                                                                                                                                                                                        |
+|--------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| JavaScript / TypeScript        | `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.d.ts`                                                                                                                                                                                                                                       |
+| Node / package configuration   | `package.json`, `tsconfig.json`, `tsconfig.*.json`, `jsconfig.json`, `vite.config.js`, `vite.config.ts`, `webpack.config.js`, `webpack.config.ts`, `rollup.config.js`, `rollup.config.ts`, `esbuild.config.js`, `esbuild.config.ts`, `next.config.js`, `next.config.ts`, `nuxt.config.js`, `nuxt.config.ts` |
+| Java / JVM                     | `.java`, `.kt`, `.kts`, `.scala`, `.groovy`, `.gradle`, `.gradle.kts`, `pom.xml`, `settings.gradle`, `settings.gradle.kts`, `build.gradle`, `build.gradle.kts`                                                                                                                                              |
+| C# / .NET                      | `.cs`, `.csproj`, `.sln`, `.fs`, `.fsproj`, `.vb`, `.vbproj`, `Directory.Build.props`, `Directory.Build.targets`, `global.json`, `appsettings.json`, `appsettings.*.json`                                                                                                                                   |
+| Python                         | `.py`, `.pyi`, `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt`, `requirements-*.txt`, `Pipfile`, `Pipfile.lock`, `poetry.lock`, `tox.ini`                                                                                                                                                     |
+| Go                             | `.go`, `go.mod`, `go.sum`, `go.work`                                                                                                                                                                                                                                                                        |
+| Rust                           | `.rs`, `Cargo.toml`, `Cargo.lock`, `build.rs`                                                                                                                                                                                                                                                               |
+| C / C++                        | `.c`, `.h`, `.cc`, `.cpp`, `.cxx`, `.hpp`, `.hh`, `.hxx`, `CMakeLists.txt`, `.cmake`, `Makefile`, `configure.ac`, `meson.build`                                                                                                                                                                             |
+| Ruby                           | `.rb`, `.rake`, `Gemfile`, `Gemfile.lock`, `Rakefile`, `.gemspec`                                                                                                                                                                                                                                           |
+| PHP                            | `.php`, `.phtml`, `composer.json`, `composer.lock`                                                                                                                                                                                                                                                          |
+| Swift / Objective-C            | `.swift`, `.m`, `.mm`, `.h`, `.xcodeproj`, `.xcworkspace`, `Package.swift`, `Podfile`, `Cartfile`                                                                                                                                                                                                           |
+| Kotlin / Android               | `.kt`, `.kts`, `AndroidManifest.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts`                                                                                                                                                                                          |
+| Dart / Flutter                 | `.dart`, `pubspec.yaml`, `pubspec.lock`                                                                                                                                                                                                                                                                     |
+| Mobile and desktop manifests   | `AndroidManifest.xml`, `Info.plist`, `Entitlements.plist`, `tauri.conf.json`, `electron-builder.yml`, `capacitor.config.json`, `capacitor.config.ts`                                                                                                                                                        |
+| Web application assets         | `.html`, `.htm`, `.css`, `.scss`, `.sass`, `.less`, `.vue`, `.svelte`, `.astro`, `.mdx`                                                                                                                                                                                                                     |
+| API and service definitions    | `.proto`, `.thrift`, `.avdl`, `.avsc`, `.graphql`, `.gql`, `schema.graphql`, `openapi.yaml`, `openapi.yml`, `openapi.json`, `swagger.yaml`, `swagger.yml`, `swagger.json`, `asyncapi.yaml`, `asyncapi.yml`, `asyncapi.json`                                                                                 |
+| Tests and specifications       | `.test.js`, `.test.jsx`, `.test.ts`, `.test.tsx`, `.spec.js`, `.spec.jsx`, `.spec.ts`, `.spec.tsx`, `.feature`, `.robot`, `.bats`, test source files under `test`, `tests`, `spec`, `__tests__`, `src/test`, or equivalent framework-specific directories                                                   |
+| Runtime and app configuration  | `.env.example`, `.env.sample`, `.env.template`, `config.json`, `config.yaml`, `config.yml`, `application.properties`, `application.yml`, `application.yaml`, `bootstrap.yml`, `bootstrap.yaml`, `settings.py`, `settings.toml`, `config.toml`, `config.edn`, `config.exs`                                   |
+
+#### Data source file types
+
+Data source files describe persistence models, schemas, migrations, analytical models, messaging contracts, seed data, and data-processing topology.
+
+| Category                       | File types and names                                                                                                                                                                                                                               |
+|--------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| SQL and relational schema      | `.sql`, `.ddl`, `.dml`, migration files under `migrations`, `migration`, `db/migration`, `schema`, `schemas`, `database`, `liquibase`, `flyway`, or equivalent directories                                                                         |
+| Database migration tools       | `changelog.xml`, `db.changelog-*.xml`, `liquibase.properties`, `flyway.conf`, `schema.rb`, `structure.sql`, Alembic migration `.py` files, Rails migration `.rb` files                                                                             |
+| ORM and persistence models     | `schema.prisma`, `.prisma`, Entity Framework migration `.cs` files, Hibernate mapping `.hbm.xml`, JPA entity `.java` / `.kt` files, SQLAlchemy model `.py` files, Django model `.py` files, Rails model `.rb` files                                |
+| NoSQL and document schemas     | `.bson`, JSON schema files, `*.schema.json`, `*.schema.yaml`, `*.schema.yml`, MongoDB migration scripts, Cassandra `.cql`, Elasticsearch index templates, OpenSearch index templates                                                               |
+| Analytics and transformation   | `dbt_project.yml`, `profiles.yml`, dbt model `.sql` files, dbt schema `.yml` / `.yaml` files, `.ipynb`, data pipeline `.py`, `.scala`, `.sql`, `.r`, `.R`, `.jl`, `dvc.yaml`, `dvc.lock`                                                           |
+| Messaging and event contracts  | `.avsc`, `.avdl`, `.proto`, `.thrift`, `.jsonschema`, `*.schema.json`, Kafka topic definitions, AsyncAPI files, CloudEvents schema files                                                                                                           |
+| Data fixtures and seeds        | `seed.sql`, `seeds.sql`, `fixtures.yml`, `fixtures.yaml`, fixture `.json`, seed `.json`, seed `.csv`, `seeds` directories, `fixtures` directories                                                                                                  |
+| ETL / orchestration            | Airflow DAG `.py` files, Dagster `.py` files, Prefect flow `.py` files, Luigi `.py` files, `pipeline.yaml`, `pipeline.yml`, `workflow.yaml`, `workflow.yml`, `dvc.yaml`, `kedro.yml`                                                               |
+| Data governance metadata       | `catalog.yml`, `catalog.yaml`, `sources.yml`, `sources.yaml`, `metadata.yml`, `metadata.yaml`, `glossary.yml`, `glossary.yaml`, lineage files, data quality rule files, Great Expectations `.json` / `.yml` / `.yaml` files                        |
+
+#### Infrastructure source file types
+
+Infrastructure source files describe deployment topology, runtime platforms, networking, environment configuration, service composition, cloud resources, automation, and operational runbooks.
+
+| Category                       | File types and names                                                                                                                                                                                                                                                                   |
+|--------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Containers                     | `Dockerfile`, `Dockerfile.*`, `.dockerignore`, `docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, `compose.yaml`, `containerfile`, `Containerfile`                                                                                                                            |
+| Kubernetes                     | `.yaml`, `.yml`, `.json` manifests containing Kubernetes resources, `kustomization.yaml`, `kustomization.yml`, Helm `Chart.yaml`, `values.yaml`, `values.*.yaml`, `templates/*.yaml`, `templates/*.tpl`                                                                                |
+| Terraform / OpenTofu           | `.tf`, `.tfvars`, `.tf.json`, `.tfvars.json`, `.terraform.lock.hcl`, `terragrunt.hcl`, `terragrunt.hcl.json`                                                                                                                                                                           |
+| CloudFormation / SAM / CDK     | CloudFormation `.yaml`, `.yml`, `.json`, `template.yaml`, `template.yml`, `samconfig.toml`, AWS CDK `.ts`, `.js`, `.py`, `.java`, `.cs`, `.go` app files                                                                                                                               |
+| Pulumi                         | `Pulumi.yaml`, `Pulumi.*.yaml`, Pulumi program files in `.ts`, `.js`, `.py`, `.go`, `.cs`, `.java`, `Pulumi.*.json`                                                                                                                                                                    |
+| Azure infrastructure           | `.bicep`, ARM template `.json`, `azure-pipelines.yml`, `azure-pipelines.yaml`, Azure deployment parameter files                                                                                                                                                                        |
+| Google Cloud infrastructure    | Deployment Manager `.yaml`, `.jinja`, `.py`, Cloud Build `cloudbuild.yaml`, `cloudbuild.yml`, Firebase `firebase.json`, `.firebaserc`                                                                                                                                                  |
+| CI/CD                          | `.github/workflows/*.yml`, `.github/workflows/*.yaml`, `.gitlab-ci.yml`, `Jenkinsfile`, `Jenkinsfile.*`, `.circleci/config.yml`, `bitbucket-pipelines.yml`, `buildkite.yml`, `.buildkite/*.yml`, `drone.yml`, `drone.yaml`, `tekton` manifests, Argo Workflow manifests                |
+| Configuration management       | Ansible `.yml`, `.yaml`, `playbook.yml`, `playbook.yaml`, `inventory`, `inventory.ini`, `group_vars`, `host_vars`, Chef `.rb`, Puppet `.pp`, Salt `.sls`, Packer `.pkr.hcl`, `packer.json`, Vagrantfile                                                                                |
+| Service mesh and gateways      | Istio, Linkerd, Consul, Envoy, Kong, NGINX, Apache, HAProxy, Traefik, and API gateway configuration files: `.yaml`, `.yml`, `.json`, `.conf`, `.toml`                                                                                                                                  |
+| Serverless                     | `serverless.yml`, `serverless.yaml`, `sst.config.ts`, `sst.config.js`, `netlify.toml`, `vercel.json`, `wrangler.toml`, `wrangler.json`, `app.yaml`, `dispatch.yaml`, function configuration files                                                                                      |
+| Observability                  | `prometheus.yml`, `prometheus.yaml`, `alertmanager.yml`, `alertmanager.yaml`, Grafana dashboard `.json`, OpenTelemetry collector `.yaml` / `.yml`, `otel-collector-config.yaml`, `datadog.yaml`, `newrelic.yml`, logging pipeline `.conf`, `.yaml`, `.yml`, `.toml`                    |
+| Operations documentation       | `RUNBOOK.md`, `Runbook.md`, `runbook.md`, `OPERATIONS.md`, `Operations.md`, `operations.md`, `SRE.md`, `oncall.md`, `incident-response.md`, `playbook.md`, architecture or deployment documentation under `ops`, `runbooks`, `deploy`, `deployment`, or `infrastructure` directories   |
+
+#### Security source file types
+
+Security source files describe authentication and authorization boundaries, policy-as-code, compliance controls, threat models, secrets-handling expectations, supply-chain posture, and security operations.
+
+| Category                       | File types and names                                                                                                                                                                                                                                                                    |
+|--------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Security documentation         | `SECURITY.md`, `security.md`, `THREAT_MODEL.md`, `threat-model.md`, `threat_model.md`, `RISK.md`, `risk.md`, `COMPLIANCE.md`, `compliance.md`, `PRIVACY.md`, `privacy.md`, `DATA_PROTECTION.md`, `data-protection.md`, security docs under `security`, `compliance`, or `risk`          |
+| Policy as code                 | Open Policy Agent `.rego`, Conftest policy files, Sentinel `.sentinel`, Cedar `.cedar`, Kyverno `.yaml` / `.yml`, Gatekeeper constraint templates and constraints, Kubernetes admission policy manifests                                                                                |
+| IAM and access control         | AWS IAM policy `.json`, role and policy Terraform `.tf`, Azure role definition `.json`, GCP IAM policy `.yaml` / `.json`, RBAC Kubernetes manifests, `rbac.yaml`, `rbac.yml`, authorization policy manifests                                                                            |
+| Secrets and secret templates   | `.env.example`, `.env.sample`, `.env.template`, `secrets.example.yml`, `secrets.example.yaml`, `sealed-secrets` manifests, External Secrets manifests, SOPS `.sops.yaml`, encrypted SOPS `.yaml` / `.yml` / `.json` metadata                                                            |
+| Certificates and trust config  | `.pem`, `.crt`, `.cer`, `.csr`, `.key.example`, trust store configuration, mTLS configuration, certificate issuer manifests, cert-manager manifests                                                                                                                                     |
+| Dependency and supply chain    | `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, `go.sum`, `Gemfile.lock`, `poetry.lock`, `Pipfile.lock`, `composer.lock`, `gradle.lockfile`, `verification-metadata.xml`, `cosign.pub`, `slsa*.json`, provenance files                         |
+| Security scanner config        | `.semgrep.yml`, `.semgrep.yaml`, `semgrep.yml`, `semgrep.yaml`, `.snyk`, `snyk.yml`, `snyk.yaml`, `trivy.yaml`, `trivy.yml`, `grype.yaml`, `grype.yml`, `gitleaks.toml`, `.gitleaks.toml`, `detect-secrets.yaml`, `.detect-secrets.baseline`, `codeql-config.yml`, `codeql-config.yaml` |
+| Authentication configuration   | OAuth, OIDC, SAML, LDAP, SSO, JWT, session, CORS, CSRF, and API gateway authentication configuration in `.yaml`, `.yml`, `.json`, `.toml`, `.properties`, `.conf`, app configuration files, and infrastructure manifests                                                                |
+| Network security               | Security group, firewall, network policy, ingress, egress, WAF, API gateway, service mesh authorization policy, and TLS configuration files in `.tf`, `.yaml`, `.yml`, `.json`, `.conf`, `.toml`                                                                                        |
+| Compliance evidence            | SOC 2, ISO 27001, PCI, HIPAA, GDPR, data-retention, audit, control-mapping, and privacy-impact documentation in `.md`, `.adoc`, `.rst`, `.txt`, `.yaml`, `.yml`, `.json`, `.csv`                                                                                                        |
+
+These categories are intentionally overlapping. A file can be both an application source and a security source, or both an infrastructure source and a data source. The local client should preserve evidence type, source identity, file path, and lightweight metadata rather than forcing each file into exactly one category.
+
+A single scanned source may create a local architecture model. Later scans may append additional structural facts or supporting context to that same model when they are associated with the same Meridian architecture context. A larger Meridian review may combine code-derived facts with user-provided architecture context and other sources of information.
 
 ### Design principle
 
