@@ -80,7 +80,7 @@
   - [x] `MERIDIAN_API_KEY`
   - [x] `MERIDIAN_BACKEND_URL`
   - [x] `MERIDIAN_LOG`
-- [ ] Confirm API key validation and messages align with `m_live_...` Meridian API keys
+- [x] Confirm API key validation and messages align with `m_live_...` Meridian API keys
 - [x] Replace generic `/api/review` usage with the backend's current review endpoint
 - [x] Confirm review endpoint selection among:
   - [x] `POST /api/skills/review/full`
@@ -107,7 +107,7 @@
   - [ ] consequences
   - [ ] confidence
   - [ ] open questions
-- [ ] Surface authentication failures clearly
+- [x] Surface authentication failures clearly
 - [ ] Surface insufficient balance or usage-limit failures clearly
 - [ ] Avoid crashing on malformed backend responses
 - [ ] Add resilient retry behavior for transient backend failures where appropriate
@@ -125,7 +125,7 @@
 - [ ] Confirm MCP tool descriptions explain that intermediate reviews require a prior full review baseline
 - [ ] Confirm MCP tool descriptions explain that missing baseline should lead to a full review recommendation
 - [ ] Confirm MCP tool descriptions explain that Meridian recommends and the customer organization decides
-- [ ] Ensure MCP mode startup does not print non-protocol output to stdout
+- [x] Ensure MCP mode startup does not print non-protocol output to stdout
 - [ ] Document local configuration for Cursor, Claude Code, and VS Code MCP usage
 - [ ] Add compatibility tests for MCP request/response behavior
 - [ ] Add compatibility tests for readiness, missing baseline, missing context, full-review recommendation, and decision-guidance response categories
