@@ -62,6 +62,30 @@ Call once when opening a project — cached automatically.
 root_dir: "/path/to/your/project"
 ```
 
+### `view_cached_architecture_model`
+Returns the currently cached architecture model without rescanning the project or calling the backend.
+
+Use this to inspect what Meridian has cached locally after `scan_project`.
+
+Returns:
+
+```json
+{ a
+  "status": "ok", 
+  "context_id": "00000000-0000-0000-0000-000000000000", 
+  "document_count": 12, 
+  "model": 
+    { 
+      "contextId": "00000000-0000-0000-0000-000000000000", 
+      "components": [], 
+      "relationships": [], 
+      "globalObservations": {}, 
+      "evidence": [], 
+      "warnings": []
+    }
+}
+```
+
 ### `review_file`
 Reviews a single file for architectural violations.
 

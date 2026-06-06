@@ -196,6 +196,30 @@ impl MeridianServer {
         }
     }
 
+    #[tool(
+        description = "View the cached Meridian architecture model without rescanning the project or calling the backend. Use this to inspect the local cached model produced by scan_project."
+    )]
+    async fn view_cached_architecture_model(&self) -> String {
+        info!("view_cached_architecture_model");
+
+        match load_cached_request() {
+            Ok(cached) => {
+                info!("view_cached_architecture_model: complete");
+                json!({
+                    "status": "ok",
+                    "context_id": cached.request.context_id,
+                    "document_count": cached.request.documents.len(),
+                    "model": cached.request.architecture_model
+                })
+                .to_string()
+            }
+            Err(e) => {
+                tracing::error!("view_cached_architecture_model failed: {}", e);
+                json!({ "error": e.to_string() }).to_string()
+            }
+        }
+    }
+
     #[tool(description = "Clear the cached architecture model for a project. \
         Use this after major refactors to force a fresh scan.")]
     async fn invalidate_cache(&self) -> String {
@@ -480,6 +504,7 @@ async fn run_cli(args: Vec<String>) -> Result<()> {
         Some("review") => cli_review().await,
         Some("cache") => match args.get(2).map(String::as_str) {
             Some("clear") => cli_cache_clear(),
+            Some("model") => cli_cache_model(),
             _ => {
                 anyhow::bail!("usage: meridian cache clear");
             }
@@ -816,6 +841,22 @@ fn cli_cache_clear() -> Result<()> {
     Ok(())
 }
 
+fn cli_cache_model() -> Result<()> {
+    let cached = load_cached_request()?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": "ok",
+            "context_id": cached.request.context_id,
+            "document_count": cached.request.documents.len(),
+            "model": cached.request.architecture_model
+        }))?
+    );
+
+    Ok(())
+}
+
 fn cli_context_template() -> Result<()> {
     println!(
         "{}",
@@ -1038,6 +1079,7 @@ Usage:
   meridian-mcp fund bitcoin status <address>
   meridian-mcp review
   meridian-mcp cache clear
+  meridian-mcp cache model
   meridian-mcp config set api-key <key>
   meridian-mcp config set backend-url <url>
   meridian-mcp test backend
