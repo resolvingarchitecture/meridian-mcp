@@ -32,6 +32,57 @@
 - [ ] Make cache invalidation more explicit and observable
 - [ ] Add local diagnostics for configuration, backend reachability, and cache health
 
+### Skill/Service Workflow Support
+
+- [ ] Document that backend Skill is synonymous with Resolving Architecture Service.
+- [ ] Update MCP tool descriptions to use service/skill terminology consistently.
+- [ ] Add response handling for skill workflow readiness states.
+- [ ] Add response handling for `QUESTIONS_REQUIRED` or equivalent backend response.
+- [ ] Add response handling for backend-generated skill workflow questions.
+- [ ] Add local rendering for question prompts in CLI output.
+- [ ] Add MCP response shape for questions so agentic clients can present them to users.
+- [ ] Add compatibility handling for backend workflow IDs or correlation IDs.
+- [ ] Add future MCP tool design for `start_skill_workflow`.
+- [ ] Add future MCP tool design for `answer_skill_questions`.
+- [ ] Ensure skill workflow support does not add local architecture judgment.
+- [ ] Ensure skill workflow support does not add local rules execution.
+- [ ] Ensure skill workflow support does not add local prompt construction.
+
+### Local Architecture Model Ownership
+
+- [ ] Document that MCP owns local Architecture Model persistence.
+- [ ] Ensure Architecture Model cache remains local-only.
+- [ ] Ensure Architecture Model is sent to backend only as transient request input.
+- [ ] Add CLI/help copy explaining that backend does not persist raw Architecture Models.
+- [ ] Add MCP tool description copy explaining that backend does not persist raw Architecture Models.
+- [ ] Ensure user/agent answers to backend questions can enrich the local Architecture Model.
+- [ ] Distinguish local Architecture Model context from backend analysis results in cache structures.
+- [ ] Avoid storing backend findings or reports inside the Architecture Model unless explicitly required by a future contract.
+- [ ] Add tests proving Architecture Model cache does not include backend-only product data.
+- [ ] Add tests proving question answers are handled as local context unless explicitly submitted to backend-supported result/decision APIs.
+
+### Backend Question Loop
+
+- [ ] Parse backend-generated question arrays.
+- [ ] Preserve question IDs for follow-up answer submission.
+- [ ] Preserve answer type metadata.
+- [ ] Preserve required/optional metadata.
+- [ ] Preserve why-it-matters metadata.
+- [ ] Preserve related skill/domain/stack metadata.
+- [ ] Render missing-context categories clearly.
+- [ ] Render proceed recommendations clearly.
+- [ ] Add CLI smoke test for a questions-required response.
+- [ ] Add MCP compatibility test for a questions-required response.
+- [ ] Add malformed question response handling.
+
+### Privacy Boundary
+
+- [ ] Add tests ensuring raw source content is not written to logs during skill workflow requests.
+- [ ] Add tests ensuring Architecture Model payloads are not logged.
+- [ ] Add docs explaining that raw Architecture Models are not backend-persisted.
+- [ ] Add docs explaining that backend persists only analysis results and privacy-safe metadata.
+- [ ] Ensure local diagnostics do not print raw Architecture Model payloads by default.
+
 ### Scanner and Architecture Model
 
 - [x] Implement repository traversal

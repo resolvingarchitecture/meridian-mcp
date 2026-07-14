@@ -291,13 +291,80 @@ impl CachedArchitectureReviewRequest {
 
         request.request_id = Uuid::new_v4();
         request.options = options;
+        request.documents = outbound_review_documents(request.documents);
 
         if let Some(reviewed_document) = reviewed_document {
-            request.documents.push(reviewed_document);
+            request
+                .documents
+                .push(sanitize_outbound_document(reviewed_document));
         }
 
         request
     }
+}
+
+fn outbound_review_documents(documents: Vec<DocumentInput>) -> Vec<DocumentInput> {
+    documents
+        .into_iter()
+        .filter_map(|document| {
+            if is_design_document(&document) {
+                Some(document)
+            } else if is_source_document(&document) {
+                Some(strip_document_content(document))
+            } else {
+                Some(strip_code_content(document))
+            }
+        })
+        .collect()
+}
+
+fn sanitize_outbound_document(document: DocumentInput) -> DocumentInput {
+    if is_design_document(&document) {
+        document
+    } else if is_source_document(&document) {
+        strip_document_content(document)
+    } else {
+        strip_code_content(document)
+    }
+}
+
+fn strip_document_content(mut document: DocumentInput) -> DocumentInput {
+    document.content.clear();
+    document
+}
+
+fn strip_code_content(mut document: DocumentInput) -> DocumentInput {
+    document.content = document
+        .content
+        .into_iter()
+        .filter(|content| !matches!(content.content_type, ContentType::Code))
+        .collect();
+
+    document
+}
+
+fn is_design_document(document: &DocumentInput) -> bool {
+    matches!(
+        document.type_hint,
+        DocumentTypeHint::ArchitectureDecisionRecord
+            | DocumentTypeHint::ApplicationDesign
+            | DocumentTypeHint::IntegrationDesign
+            | DocumentTypeHint::DataModel
+            | DocumentTypeHint::InfrastructureDesign
+            | DocumentTypeHint::SecurityDesign
+            | DocumentTypeHint::ThreatModel
+            | DocumentTypeHint::EnterpriseRoadmap
+            | DocumentTypeHint::StandardsDocument
+            | DocumentTypeHint::Runbook
+    )
+}
+
+fn is_source_document(document: &DocumentInput) -> bool {
+    matches!(document.type_hint, DocumentTypeHint::Codebase)
+        || document
+            .content
+            .iter()
+            .any(|content| matches!(content.content_type, ContentType::Code))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -469,7 +536,7 @@ pub enum ArchitectureComponentType {
     Unknown,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Domain {
     Application,

@@ -398,13 +398,13 @@ The binary exposes Meridian tools through MCP tool discovery. Each tool should i
 
 The core MCP tool set is:
 
-| Tool                         | Responsibility                                                                  |
-|------------------------------|---------------------------------------------------------------------------------|
-| `scan_project(root_dir)`     | Build or extend the cached local architecture model from one local source root   |
-| `review_prompt(...)`         | Ask the backend for full-review readiness or prompt guidance using cached model  |
-| `review_full(...)`           | Request a full architecture review using cached model context                    |
-| `review_file(...)`           | Review one file or change against cached local facts and backend baseline policy |
-| `invalidate_cache(root_dir)` | Drop cached model data and force a fresh scan                                    |
+| Tool                          | Responsibility                                                                   |
+|-------------------------------|----------------------------------------------------------------------------------|
+| `scan_project(root_dir)`      | Build or extend the cached local architecture model from one local source root   |
+| `review_prompt(...)`          | Ask the backend for full-review readiness or prompt guidance using cached model  |
+| `review_full(...)`            | Request a full architecture review using cached model context                    |
+| `review_file(...)`            | Review one file or change against cached local facts and backend baseline policy |
+| `invalidate_cache(root_dir)`  | Drop cached model data and force a fresh scan                                    |
 
 Additional tools such as `scan_sources`, `scan_roots`, or `get_project_status` may be added when the backend and IDE workflow need first-class multi-source or status discovery support.
 
@@ -468,14 +468,14 @@ Input schema:
 
 Expected response categories:
 
-| Category             | Meaning                                                                           |
-|----------------------|-----------------------------------------------------------------------------------|
-| Ready                | Backend has enough context to proceed                                             |
-| Partial              | Backend can proceed only with clearly stated limitations or provisional guidance   |
-| Insufficient context | More context is needed before a useful full review can be produced                |
-| Missing context      | Backend returned specific missing information or targeted questions               |
-| Domain guidance      | Backend returned domain-selection or pricing-related prompt information           |
-| Error                | Authentication, usage, backend, parsing, or transport failure                     |
+| Category              | Meaning                                                                            |
+|-----------------------|------------------------------------------------------------------------------------|
+| Ready                 | Backend has enough context to proceed                                              |
+| Partial               | Backend can proceed only with clearly stated limitations or provisional guidance   |
+| Insufficient context  | More context is needed before a useful full review can be produced                 |
+| Missing context       | Backend returned specific missing information or targeted questions                |
+| Domain guidance       | Backend returned domain-selection or pricing-related prompt information            |
+| Error                 | Authentication, usage, backend, parsing, or transport failure                      |
 
 This tool should:
 
@@ -507,14 +507,14 @@ Input schema:
 
 Expected response categories:
 
-| Category             | Meaning                                                                                       |
-|----------------------|-----------------------------------------------------------------------------------------------|
-| Full review report   | Backend produced a full architecture review                                                    |
-| Missing context      | Backend needs more context before producing a credible full review                             |
-| Partial              | Backend returned limited or provisional output with stated limitations                         |
-| Decision guidance    | Backend returned options, trade-offs, approval stakeholders, affected parties, or assumptions |
-| Baseline created     | Backend created or updated a full-review baseline where supported                              |
-| Error                | Authentication, usage, backend, parsing, or transport failure                                  |
+| Category              | Meaning                                                                                        |
+|-----------------------|------------------------------------------------------------------------------------------------|
+| Full review report    | Backend produced a full architecture review                                                    |
+| Missing context       | Backend needs more context before producing a credible full review                             |
+| Partial               | Backend returned limited or provisional output with stated limitations                         |
+| Decision guidance     | Backend returned options, trade-offs, approval stakeholders, affected parties, or assumptions  |
+| Baseline created      | Backend created or updated a full-review baseline where supported                              |
+| Error                 | Authentication, usage, backend, parsing, or transport failure                                  |
 
 This tool should:
 
@@ -590,6 +590,52 @@ Use when:
 - code, ADRs, contracts, deployment manifests, and supporting documentation should all contribute evidence to one model.
 
 This tool should preserve source identity while appending discovered architecture facts and context into the cached model. The backend remains responsible for interpreting whether those sources belong to one review scope, several independent scopes, or a larger portfolio context.
+
+### Future `start_skill_workflow(...)`
+
+A future MCP tool should start a backend skill workflow using the local Architecture Model.
+
+Use when:
+
+- a user or agent selects a skill/service such as Evaluate, Document, Design, Transition, Scalability, Feasibility, Prototype, Proof of Concept, or Decentralization;
+- a user or agent selects a domain and stack;
+- the backend must decide whether enough context exists;
+- the backend may return targeted questions before analysis.
+
+Conceptual input schema:
+
+| Field        | Required  | Purpose                                                           |
+|--------------|-----------|-------------------------------------------------------------------|
+| `skill_id`   | Yes       | Skill/service to perform                                          |
+| `domain_id`  | No        | Architecture domain being addressed                               |
+| `stack_id`   | No        | Selected stack context                                            |
+| `context_id` | No        | Optional customer-side/backend correlation identifier             |
+| `root_dir`   | No        | Local root whose cached Architecture Model should be used         |
+| `scope`      | No        | Workflow scope, such as system, file, source, decision, or change |
+
+Expected response categories:
+
+| Category             | Meaning                                                          |
+|----------------------|------------------------------------------------------------------|
+| Ready                | Backend can proceed                                              |
+| Partial              | Backend can proceed only with limitations                        |
+| Questions required   | Backend returned questions for user/agent                        |
+| Insufficient context | Backend cannot proceed credibly yet                              |
+| Analysis result      | Backend returned findings, report, or guidance                   |
+| Error                | Authentication, usage, transport, validation, or backend failure |
+
+### Future `answer_skill_questions(...)`
+
+A future MCP tool should let an agent or deterministic client submit answers to backend-generated questions by updating the local Architecture Model and optionally continuing the workflow.
+
+Preferred behavior:
+
+1. receive answers from user/agent;
+2. update local Architecture Model with the answers as customer-side context;
+3. resubmit updated Architecture Model to backend workflow;
+4. return updated readiness, questions, limitations, or analysis result.
+
+MCP should not persist question answers as backend-owned product state. Answers become part of the local Architecture Model unless the user explicitly records them as a backend-supported decision or result artifact.
 
 ---
 
@@ -786,6 +832,59 @@ Invalidate when:
 - stakeholder consensus state storage
 
 ---
+
+## Skill workflow and Architecture Model ownership
+
+In Meridian, backend **Skill** is synonymous with Resolving Architecture **Service**.
+
+`meridian-mcp` should treat skill workflow responses as backend-owned architecture assistant guidance. The local MCP runtime should not implement skill process logic itself, but it must support the workflow loop.
+
+The Architecture Model is owned locally by MCP.
+
+`meridian-mcp` is responsible for:
+
+- building the Architecture Model from local sources;
+- enriching the Architecture Model with user/agent answers where appropriate;
+- persisting the Architecture Model in the local cache;
+- sending the Architecture Model to the backend as transient request input;
+- receiving backend readiness, missing-context, and question responses;
+- presenting backend-generated questions through MCP/CLI clients;
+- resubmitting the updated Architecture Model after user/agent answers.
+
+The backend is responsible for:
+
+- interpreting the Architecture Model;
+- applying skill workflow process logic;
+- deciding readiness;
+- generating targeted questions;
+- performing analysis;
+- returning findings, reports, limitations, or recommendations;
+- persisting only permitted analysis results and privacy-safe records.
+
+The backend must not persist the raw Architecture Model. `meridian-mcp` should preserve this product boundary in tool descriptions, CLI output, and documentation.
+
+Conceptual loop:
+
+```text
+scan local sources 
+    → build local Architecture Model 
+    → persist Architecture Model locally 
+    → send Architecture Model to backend for skill workflow 
+    → backend returns READY, PARTIAL, INSUFFICIENT, or QUESTIONS_REQUIRED 
+    → MCP presents backend questions to user/agent 
+    → user/agent answers 
+    → MCP updates local Architecture Model 
+    → MCP resubmits updated Architecture Model 
+    → backend returns analysis result
+```
+
+MCP should not store backend analysis results as part of the Architecture Model unless the backend contract explicitly marks them as local context that should be retained. Even then, MCP should distinguish:
+
+- local architecture context;
+- backend analysis result;
+- backend-generated question;
+- user/agent answer;
+- persisted backend result reference.
 
 ## Backend integration
 

@@ -1,9 +1,14 @@
 use crate::models::{
-    ContentEncoding, ContentType, DocumentContent, DocumentInput, DocumentTypeHint,
+    ArchitectureComponent, ArchitectureComponentType, ArchitectureContext, ArchitectureEvidence,
+    ArchitectureModel, ArchitectureObservations, ArchitectureRelationship,
+    ArchitectureRelationshipType, ContentEncoding, ContentType, DocumentContent, DocumentInput,
+    DocumentTypeHint, Domain,
 };
 use crate::scanner::adrs;
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 /// Known architecture documentation files.
 const ARCH_DOCS: &[&str] = &[
@@ -753,6 +758,1121 @@ fn path_contains_any_component(path: &Path, components: &[&str]) -> bool {
     })
 }
 
+fn document_id_for_path(path: &Path) -> String {
+    let normalized = path.to_string_lossy();
+    let slug: String = normalized
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+
+    let trimmed = slug.trim_matches('-');
+
+    if trimmed.is_empty() {
+        "document".to_string()
+    } else {
+        format!("document-{trimmed}")
+    }
+}
+
+/// Build a local architecture model from already-harvested documents.
+///
+/// This intentionally runs on the client/MCP side so raw source does not need to
+/// be sent to the backend for architecture discovery. The backend can then focus
+/// on readiness/review validation against this structural model.
+pub fn discover_architecture_model(
+    context_id: Uuid,
+    documents: &[DocumentInput],
+) -> ArchitectureModel {
+    let evidence = documents
+        .iter()
+        .map(architecture_evidence_for_document)
+        .collect::<Vec<_>>();
+
+    let layers = infer_layers(documents);
+    let layer_order = infer_layer_order(&layers);
+    let patterns = detect_patterns(documents);
+    let adrs = harvest_adr_refs(documents);
+    let modules = infer_modules(documents);
+    let technologies = infer_technologies(documents);
+    let conventions = infer_conventions(documents);
+    let risks = infer_risks(documents);
+
+    let global_observations = ArchitectureObservations {
+        layers: layers.clone(),
+        layer_order: layer_order.clone(),
+        style: infer_style(&layers, &patterns),
+        patterns: patterns.clone(),
+        adrs: adrs.clone(),
+        modules: modules.clone(),
+        technologies: technologies.clone(),
+        risks,
+        conventions,
+    };
+
+    let components = discover_components(documents, &layers, &layer_order, &patterns, &adrs);
+
+    let relationships = discover_relationships(&components, documents);
+
+    let mut warnings = Vec::new();
+    if components.is_empty() {
+        warnings.push(
+            "No architecture boundaries were discovered from local project files.".to_string(),
+        );
+    }
+
+    if !documents.iter().any(is_source_document) {
+        warnings.push(
+            "No local source-code documents were available for source-based architecture discovery."
+                .to_string(),
+        );
+    }
+
+    if !documents.iter().any(is_design_document) {
+        warnings.push(
+            "No local design documents were available for design-intent architecture discovery."
+                .to_string(),
+        );
+    }
+
+    let context =
+        discover_architecture_context(context_id, documents, &components, &global_observations);
+
+    ArchitectureModel {
+        context_id: Some(context_id),
+        context,
+        components,
+        relationships,
+        global_observations,
+        evidence,
+        warnings,
+    }
+}
+
+fn architecture_evidence_for_document(document: &DocumentInput) -> ArchitectureEvidence {
+    ArchitectureEvidence {
+        evidence_id: evidence_id_for_document(document),
+        source_type: format!("{:?}", document.type_hint),
+        path: document.filename.clone(),
+        description: document
+            .stated_scope
+            .clone()
+            .unwrap_or_else(|| document.title.clone()),
+        scanned_at: Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|duration| duration.as_secs())
+                .unwrap_or_default(),
+        ),
+    }
+}
+
+fn discover_components(
+    documents: &[DocumentInput],
+    layers: &[String],
+    layer_order: &[String],
+    patterns: &[String],
+    adrs: &[String],
+) -> Vec<ArchitectureComponent> {
+    let mut components_by_id = BTreeMap::new();
+
+    for document in documents {
+        let Some((domain, component_type, boundary)) = component_seed_for_document(document) else {
+            continue;
+        };
+
+        let component_id = format!(
+            "{}-{}",
+            domain_name(&domain).to_ascii_lowercase(),
+            normalize_token(&boundary)
+        );
+
+        let observations = ArchitectureObservations {
+            layers: layers_for_document(document, layers),
+            layer_order: layer_order_for_document(document, layer_order),
+            style: infer_style(layers, patterns),
+            patterns: patterns_for_document(document, patterns),
+            adrs: adrs.to_vec(),
+            modules: modules_for_document(document),
+            technologies: technologies_for_document(document),
+            risks: risks_for_document(document),
+            conventions: conventions_for_document(document),
+        };
+
+        let component = ArchitectureComponent {
+            component_id: component_id.clone(),
+            name: display_boundary_name(&boundary),
+            component_type,
+            domain,
+            root: Some(boundary),
+            language: infer_language(document),
+            framework: infer_framework(document),
+            observations,
+            evidence_refs: vec![evidence_id_for_document(document)],
+            confidence: confidence_for_document(document),
+        };
+
+        components_by_id
+            .entry(component_id)
+            .and_modify(|existing: &mut ArchitectureComponent| {
+                merge_component(existing, &component);
+            })
+            .or_insert(component);
+    }
+
+    components_by_id.into_values().collect()
+}
+
+fn component_seed_for_document(
+    document: &DocumentInput,
+) -> Option<(Domain, ArchitectureComponentType, String)> {
+    match document.type_hint {
+        DocumentTypeHint::ArchitectureDecisionRecord => Some((
+            Domain::Application,
+            ArchitectureComponentType::Module,
+            boundary_for_document(document),
+        )),
+        DocumentTypeHint::ApplicationDesign | DocumentTypeHint::Codebase => Some((
+            Domain::Application,
+            ArchitectureComponentType::Application,
+            application_boundary_for_document(document),
+        )),
+        DocumentTypeHint::IntegrationDesign => Some((
+            Domain::Integration,
+            ArchitectureComponentType::Integration,
+            integration_boundary_for_document(document),
+        )),
+        DocumentTypeHint::DataModel => Some((
+            Domain::Data,
+            ArchitectureComponentType::DataStore,
+            data_boundary_for_document(document),
+        )),
+        DocumentTypeHint::InfrastructureDesign | DocumentTypeHint::Runbook => Some((
+            Domain::Infrastructure,
+            ArchitectureComponentType::Infrastructure,
+            infrastructure_boundary_for_document(document),
+        )),
+        DocumentTypeHint::SecurityDesign | DocumentTypeHint::ThreatModel => Some((
+            Domain::Security,
+            ArchitectureComponentType::SecurityScope,
+            "security-architecture".to_string(),
+        )),
+        DocumentTypeHint::EnterpriseRoadmap | DocumentTypeHint::StandardsDocument => Some((
+            Domain::Enterprise,
+            ArchitectureComponentType::EnterpriseScope,
+            "enterprise-architecture".to_string(),
+        )),
+        DocumentTypeHint::Other => None,
+    }
+}
+
+fn discover_relationships(
+    components: &[ArchitectureComponent],
+    documents: &[DocumentInput],
+) -> Vec<ArchitectureRelationship> {
+    let mut relationships = Vec::new();
+
+    for source in components {
+        for target in components {
+            if source.component_id == target.component_id {
+                continue;
+            }
+
+            if relationship_exists(source, target, documents) {
+                relationships.push(ArchitectureRelationship {
+                    source_component_id: source.component_id.clone(),
+                    target_component_id: target.component_id.clone(),
+                    relationship_type: ArchitectureRelationshipType::DependsOn,
+                    protocol: infer_relationship_protocol(source, target, documents),
+                    evidence_refs: shared_or_source_evidence_refs(source, target),
+                    confidence: 0.60,
+                });
+            }
+        }
+    }
+
+    relationships
+}
+
+fn relationship_exists(
+    source: &ArchitectureComponent,
+    target: &ArchitectureComponent,
+    documents: &[DocumentInput],
+) -> bool {
+    if source.domain == target.domain {
+        return false;
+    }
+
+    let target_name = target.name.to_ascii_lowercase();
+    let target_root = target.root.clone().unwrap_or_default().to_ascii_lowercase();
+
+    documents
+        .iter()
+        .filter(|document| {
+            let evidence_id = evidence_id_for_document(document);
+            source.evidence_refs.contains(&evidence_id)
+        })
+        .map(searchable_text)
+        .any(|text| {
+            (!target_name.is_empty() && text.contains(&target_name))
+                || (!target_root.is_empty() && text.contains(&target_root))
+                || relationship_keyword_match(&text, target.domain.clone())
+        })
+}
+
+fn relationship_keyword_match(text: &str, domain: Domain) -> bool {
+    match domain {
+        Domain::Integration => contains_any(
+            text,
+            &[
+                "api", "rest", "grpc", "webhook", "event", "queue", "topic", "mcp", "stripe",
+                "bitcoin", "bedrock",
+            ],
+        ),
+        Domain::Data => contains_any(
+            text,
+            &[
+                "database",
+                "schema",
+                "table",
+                "repository",
+                "postgres",
+                "mysql",
+                "sqlite",
+                "redis",
+            ],
+        ),
+        Domain::Infrastructure => contains_any(
+            text,
+            &[
+                "docker",
+                "kubernetes",
+                "terraform",
+                "deployment",
+                "cloud",
+                "runtime",
+                "container",
+            ],
+        ),
+        Domain::Security => contains_any(
+            text,
+            &[
+                "auth",
+                "authentication",
+                "authorization",
+                "security",
+                "iam",
+                "oauth",
+                "jwt",
+                "encryption",
+            ],
+        ),
+        Domain::Application | Domain::Enterprise => false,
+    }
+}
+
+fn infer_relationship_protocol(
+    _source: &ArchitectureComponent,
+    _target: &ArchitectureComponent,
+    documents: &[DocumentInput],
+) -> Option<String> {
+    let combined = documents
+        .iter()
+        .map(searchable_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if contains_any(&combined, &["grpc", "protobuf"]) {
+        Some("gRPC".to_string())
+    } else if contains_any(&combined, &["rest", "http", "openapi", "swagger"]) {
+        Some("HTTP/REST".to_string())
+    } else if contains_any(&combined, &["queue", "topic", "event", "kafka", "rabbitmq"]) {
+        Some("messaging".to_string())
+    } else {
+        None
+    }
+}
+
+fn discover_architecture_context(
+    context_id: Uuid,
+    documents: &[DocumentInput],
+    components: &[ArchitectureComponent],
+    observations: &ArchitectureObservations,
+) -> ArchitectureContext {
+    let scope_notes = {
+        let mut notes = Vec::new();
+
+        if !components.is_empty() {
+            notes.push(format!(
+                "Discovered architecture components locally: {:?}",
+                components
+                    .iter()
+                    .map(|component| component.name.clone())
+                    .collect::<Vec<_>>()
+            ));
+        }
+
+        if !observations.layers.is_empty() {
+            notes.push(format!("Discovered layers: {:?}", observations.layers));
+        }
+
+        if !observations.patterns.is_empty() {
+            notes.push(format!(
+                "Discovered architecture/code patterns: {:?}",
+                observations.patterns
+            ));
+        }
+
+        notes.extend(
+            documents
+                .iter()
+                .filter_map(|document| document.stated_scope.clone())
+                .filter(|scope| !scope.trim().is_empty()),
+        );
+
+        if notes.is_empty() {
+            None
+        } else {
+            Some(unique(notes))
+        }
+    };
+
+    let freeform_notes = if components.is_empty() {
+        None
+    } else {
+        Some(
+            "Architecture context was discovered locally by meridian-mcp from project files. Raw source content is not required by the backend for model discovery."
+                .to_string(),
+        )
+    };
+
+    ArchitectureContext {
+        context_id: Some(context_id),
+        organization_context: documents
+            .iter()
+            .find_map(|document| document.organization_context.clone()),
+        business_goals: None,
+        stakeholders: Some(
+            documents
+                .iter()
+                .flat_map(|document| document.known_stakeholders.clone())
+                .collect(),
+        ),
+        decisions: Some(
+            documents
+                .iter()
+                .flat_map(|document| document.known_decisions.clone())
+                .collect(),
+        ),
+        constraints: None,
+        risks: Some(observations.risks.clone()),
+        standards: Some(observations.conventions.clone()),
+        scope_notes,
+        freeform_notes,
+    }
+}
+
+fn infer_layers(documents: &[DocumentInput]) -> Vec<String> {
+    let mut layers = BTreeSet::new();
+
+    for document in documents {
+        let path = document_path(document)
+            .replace('\\', "/")
+            .to_ascii_lowercase();
+        let text = searchable_text(document);
+
+        for candidate in [
+            "domain",
+            "application",
+            "usecase",
+            "usecases",
+            "service",
+            "services",
+            "api",
+            "web",
+            "controller",
+            "controllers",
+            "ports",
+            "adapters",
+            "adapter",
+            "infrastructure",
+            "infra",
+            "persistence",
+            "repository",
+            "repositories",
+            "dao",
+        ] {
+            if path.contains(candidate) || text.contains(candidate) {
+                layers.insert(canonical_layer(candidate).to_string());
+            }
+        }
+    }
+
+    layers.into_iter().collect()
+}
+
+fn infer_layer_order(layers: &[String]) -> Vec<String> {
+    let preferred = [
+        "api",
+        "application",
+        "service",
+        "domain",
+        "ports",
+        "adapters",
+        "persistence",
+        "infrastructure",
+    ];
+
+    preferred
+        .iter()
+        .filter(|layer| layers.iter().any(|existing| existing == **layer))
+        .map(|layer| layer.to_string())
+        .collect()
+}
+
+fn detect_patterns(documents: &[DocumentInput]) -> Vec<String> {
+    let combined = documents
+        .iter()
+        .filter(|document| is_source_document(document) || is_design_document(document))
+        .take(80)
+        .map(searchable_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut patterns = BTreeSet::new();
+
+    if contains_any(&combined, &["repository", "interface ", "implements"]) {
+        patterns.insert("repository_pattern".to_string());
+    }
+
+    if contains_any(&combined, &["constructor(private", "private final"]) {
+        patterns.insert("constructor_injection".to_string());
+    }
+
+    if contains_any(&combined, &["value object", "valueobject", "record "]) {
+        patterns.insert("value_objects".to_string());
+    }
+
+    if contains_any(&combined, &["dto", "request", "response"]) {
+        patterns.insert("dto_boundary".to_string());
+    }
+
+    if contains_any(&combined, &["command", "query", "handler"]) {
+        patterns.insert("cqrs".to_string());
+    }
+
+    if contains_any(&combined, &["event", "publish", "dispatch", "emit"]) {
+        patterns.insert("domain_events".to_string());
+    }
+
+    if contains_any(&combined, &["hexagonal", "ports and adapters"]) {
+        patterns.insert("hexagonal_architecture".to_string());
+    }
+
+    if contains_any(&combined, &["clean architecture"]) {
+        patterns.insert("clean_architecture".to_string());
+    }
+
+    if contains_any(&combined, &["microservice", "microservices"]) {
+        patterns.insert("microservices".to_string());
+    }
+
+    patterns.into_iter().collect()
+}
+
+fn harvest_adr_refs(documents: &[DocumentInput]) -> Vec<String> {
+    documents
+        .iter()
+        .filter(|document| {
+            matches!(
+                document.type_hint,
+                DocumentTypeHint::ArchitectureDecisionRecord
+            )
+        })
+        .map(|document| {
+            format!(
+                "{}: {}",
+                document
+                    .filename
+                    .clone()
+                    .unwrap_or_else(|| document.id.clone()),
+                document.title
+            )
+        })
+        .collect()
+}
+
+fn infer_modules(documents: &[DocumentInput]) -> Vec<String> {
+    unique(
+        documents
+            .iter()
+            .flat_map(modules_for_document)
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn infer_technologies(documents: &[DocumentInput]) -> Vec<String> {
+    unique(
+        documents
+            .iter()
+            .flat_map(technologies_for_document)
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn infer_conventions(documents: &[DocumentInput]) -> Vec<String> {
+    unique(
+        documents
+            .iter()
+            .flat_map(conventions_for_document)
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn infer_risks(documents: &[DocumentInput]) -> Vec<String> {
+    unique(
+        documents
+            .iter()
+            .flat_map(risks_for_document)
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn layers_for_document(document: &DocumentInput, all_layers: &[String]) -> Vec<String> {
+    let text = searchable_text(document);
+    all_layers
+        .iter()
+        .filter(|layer| text.contains(layer.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn layer_order_for_document(
+    document: &DocumentInput,
+    global_layer_order: &[String],
+) -> Vec<String> {
+    let document_layers = layers_for_document(document, global_layer_order);
+
+    global_layer_order
+        .iter()
+        .filter(|layer| document_layers.contains(layer))
+        .cloned()
+        .collect()
+}
+
+fn patterns_for_document(document: &DocumentInput, global_patterns: &[String]) -> Vec<String> {
+    let text = searchable_text(document);
+
+    global_patterns
+        .iter()
+        .filter(|pattern| text.contains(pattern.as_str()) || pattern_is_global_signal(pattern))
+        .cloned()
+        .collect()
+}
+
+fn pattern_is_global_signal(pattern: &str) -> bool {
+    matches!(
+        pattern,
+        "repository_pattern"
+            | "constructor_injection"
+            | "dto_boundary"
+            | "hexagonal_architecture"
+            | "clean_architecture"
+            | "microservices"
+    )
+}
+
+fn modules_for_document(document: &DocumentInput) -> Vec<String> {
+    document_path(document)
+        .replace('\\', "/")
+        .split('/')
+        .map(normalize_token)
+        .filter(|part| {
+            !part.is_empty()
+                && !matches!(
+                    part.as_str(),
+                    "src" | "main" | "test" | "java" | "resources" | "target" | "node-modules"
+                )
+        })
+        .collect()
+}
+
+fn technologies_for_document(document: &DocumentInput) -> Vec<String> {
+    let mut technologies = BTreeSet::new();
+    let text = searchable_text(document);
+
+    if let Some(language) = infer_language(document) {
+        technologies.insert(language);
+    }
+
+    for (needle, technology) in [
+        ("springframework", "spring"),
+        ("@springbootapplication", "spring_boot"),
+        ("react", "react"),
+        ("next", "nextjs"),
+        ("express", "express"),
+        ("tokio", "tokio"),
+        ("serde", "serde"),
+        ("postgres", "postgres"),
+        ("mysql", "mysql"),
+        ("redis", "redis"),
+        ("docker", "docker"),
+        ("kubernetes", "kubernetes"),
+        ("terraform", "terraform"),
+    ] {
+        if text.contains(needle) {
+            technologies.insert(technology.to_string());
+        }
+    }
+
+    technologies.into_iter().collect()
+}
+
+fn conventions_for_document(document: &DocumentInput) -> Vec<String> {
+    let text = searchable_text(document);
+    let mut conventions = BTreeSet::new();
+
+    if text.contains("src/main/java") {
+        conventions.insert("maven_or_gradle_standard_layout".to_string());
+    }
+
+    if text.contains("src/test/java") {
+        conventions.insert("java_test_layout".to_string());
+    }
+
+    if text.contains("package ") {
+        conventions.insert("package_namespaces".to_string());
+    }
+
+    if contains_any(&text, &["@service", "@repository", "@restcontroller"]) {
+        conventions.insert("spring_stereotypes".to_string());
+    }
+
+    conventions.into_iter().collect()
+}
+
+fn risks_for_document(document: &DocumentInput) -> Vec<String> {
+    content_text(document)
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            let lower = line.to_ascii_lowercase();
+            contains_any(
+                &lower,
+                &[
+                    "risk",
+                    "threat",
+                    "trade-off",
+                    "tradeoff",
+                    "assumption",
+                    "constraint",
+                    "technical debt",
+                    "vulnerability",
+                ],
+            )
+        })
+        .map(cleanup_context_line)
+        .filter(|line| !line.is_empty())
+        .take(25)
+        .collect()
+}
+
+fn infer_style(layers: &[String], patterns: &[String]) -> Option<String> {
+    let has_domain = layers.iter().any(|layer| layer == "domain");
+    let has_ports = layers
+        .iter()
+        .any(|layer| layer == "ports" || layer == "adapters");
+    let has_application = layers.iter().any(|layer| layer == "application");
+    let has_repository = patterns
+        .iter()
+        .any(|pattern| pattern == "repository_pattern");
+
+    if has_domain && has_ports {
+        Some("hexagonal".to_string())
+    } else if has_domain && has_application {
+        Some("clean_architecture".to_string())
+    } else if has_domain && has_repository {
+        Some("layered_ddd".to_string())
+    } else if has_domain {
+        Some("layered".to_string())
+    } else if !layers.is_empty() || !patterns.is_empty() {
+        Some("modular".to_string())
+    } else {
+        None
+    }
+}
+
+fn application_boundary_for_document(document: &DocumentInput) -> String {
+    let path = document_path(document).replace('\\', "/");
+
+    for marker in ["/src/main/", "/src/", "/app/", "/server/"] {
+        if let Some(index) = path.find(marker) {
+            return path[..index].to_string();
+        }
+    }
+
+    boundary_for_document(document)
+}
+
+fn integration_boundary_for_document(document: &DocumentInput) -> String {
+    let text = searchable_text(document);
+
+    if text.contains("mcp") {
+        "mcp-integration".to_string()
+    } else if text.contains("bedrock") {
+        "bedrock-integration".to_string()
+    } else if contains_any(&text, &["bitcoin", "lightning"]) {
+        "bitcoin-integration".to_string()
+    } else if text.contains("stripe") {
+        "stripe-integration".to_string()
+    } else if contains_any(&text, &["queue", "topic", "event", "channel"]) {
+        "event-integration".to_string()
+    } else {
+        "external-integration".to_string()
+    }
+}
+
+fn data_boundary_for_document(document: &DocumentInput) -> String {
+    let text = searchable_text(document);
+
+    if contains_any(&text, &["postgres", "postgresql"]) {
+        "postgres-operational-data-store".to_string()
+    } else if contains_any(&text, &["mysql", "mariadb"]) {
+        "mysql-operational-data-store".to_string()
+    } else if text.contains("redis") {
+        "redis-data-store".to_string()
+    } else if contains_any(&text, &["migration", "create table", "schema"]) {
+        "relational-operational-data-store".to_string()
+    } else {
+        "application-data-store".to_string()
+    }
+}
+
+fn infrastructure_boundary_for_document(document: &DocumentInput) -> String {
+    let text = searchable_text(document);
+
+    if contains_any(&text, &["docker", "dockerfile", "container"]) {
+        "container-deployment-model".to_string()
+    } else if contains_any(&text, &["kubernetes", "helm", "pod", "ingress"]) {
+        "kubernetes-deployment-model".to_string()
+    } else if contains_any(&text, &["terraform", "vpc", "aws", "cloud"]) {
+        "cloud-deployment-model".to_string()
+    } else if contains_any(&text, &["ci/cd", "pipeline", "github actions"]) {
+        "delivery-pipeline".to_string()
+    } else {
+        "runtime-deployment-model".to_string()
+    }
+}
+
+fn boundary_for_document(document: &DocumentInput) -> String {
+    document
+        .filename
+        .as_deref()
+        .and_then(|filename| {
+            let path = Path::new(filename);
+            path.parent()
+                .map(|parent| parent.to_string_lossy().to_string())
+        })
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| document.stated_scope.clone())
+        .unwrap_or_else(|| document.title.clone())
+}
+
+fn display_boundary_name(boundary: &str) -> String {
+    let last = boundary
+        .replace('\\', "/")
+        .split('/')
+        .last()
+        .unwrap_or(boundary)
+        .replace(['-', '_'], " ");
+
+    let name = last.trim();
+
+    if name.is_empty() {
+        "Architecture Boundary".to_string()
+    } else {
+        name.split_whitespace()
+            .map(|part| {
+                let mut chars = part.chars();
+                match chars.next() {
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => String::new(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+fn confidence_for_document(document: &DocumentInput) -> f64 {
+    let mut confidence: f64 = if is_design_document(document) {
+        0.75
+    } else {
+        0.60
+    };
+
+    if is_source_document(document) {
+        confidence += 0.05;
+    }
+
+    if document
+        .stated_scope
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        confidence += 0.05;
+    }
+
+    if !document.known_decisions.is_empty() || !document.known_stakeholders.is_empty() {
+        confidence += 0.05;
+    }
+
+    confidence.min(0.95)
+}
+
+fn merge_component(existing: &mut ArchitectureComponent, next: &ArchitectureComponent) {
+    for evidence_ref in &next.evidence_refs {
+        if !existing.evidence_refs.contains(evidence_ref) {
+            existing.evidence_refs.push(evidence_ref.clone());
+        }
+    }
+
+    existing.confidence = existing.confidence.max(next.confidence);
+
+    existing.observations.layers = unique(
+        existing
+            .observations
+            .layers
+            .iter()
+            .chain(next.observations.layers.iter())
+            .cloned()
+            .collect(),
+    );
+
+    existing.observations.patterns = unique(
+        existing
+            .observations
+            .patterns
+            .iter()
+            .chain(next.observations.patterns.iter())
+            .cloned()
+            .collect(),
+    );
+
+    existing.observations.modules = unique(
+        existing
+            .observations
+            .modules
+            .iter()
+            .chain(next.observations.modules.iter())
+            .cloned()
+            .collect(),
+    );
+
+    existing.observations.technologies = unique(
+        existing
+            .observations
+            .technologies
+            .iter()
+            .chain(next.observations.technologies.iter())
+            .cloned()
+            .collect(),
+    );
+}
+
+fn shared_or_source_evidence_refs(
+    source: &ArchitectureComponent,
+    target: &ArchitectureComponent,
+) -> Vec<String> {
+    let mut refs = source.evidence_refs.clone();
+
+    for evidence_ref in &target.evidence_refs {
+        if !refs.contains(evidence_ref) {
+            refs.push(evidence_ref.clone());
+        }
+    }
+
+    refs
+}
+
+fn is_design_document(document: &DocumentInput) -> bool {
+    matches!(
+        document.type_hint,
+        DocumentTypeHint::ArchitectureDecisionRecord
+            | DocumentTypeHint::ApplicationDesign
+            | DocumentTypeHint::IntegrationDesign
+            | DocumentTypeHint::DataModel
+            | DocumentTypeHint::InfrastructureDesign
+            | DocumentTypeHint::SecurityDesign
+            | DocumentTypeHint::ThreatModel
+            | DocumentTypeHint::EnterpriseRoadmap
+            | DocumentTypeHint::StandardsDocument
+            | DocumentTypeHint::Runbook
+    )
+}
+
+fn is_source_document(document: &DocumentInput) -> bool {
+    matches!(document.type_hint, DocumentTypeHint::Codebase)
+        || document
+            .content
+            .iter()
+            .any(|content| matches!(content.content_type, ContentType::Code))
+}
+
+fn infer_language(document: &DocumentInput) -> Option<String> {
+    let path = document_path(document).to_ascii_lowercase();
+    let text = searchable_text(document);
+
+    if path.ends_with(".java") || text.contains("public class ") || text.contains("public record ")
+    {
+        Some("java".to_string())
+    } else if path.ends_with(".ts") || path.ends_with(".tsx") {
+        Some("typescript".to_string())
+    } else if path.ends_with(".js")
+        || path.ends_with(".jsx")
+        || path.ends_with(".mjs")
+        || path.ends_with(".cjs")
+    {
+        Some("javascript".to_string())
+    } else if path.ends_with(".py") {
+        Some("python".to_string())
+    } else if path.ends_with(".rs") {
+        Some("rust".to_string())
+    } else if path.ends_with(".go") {
+        Some("go".to_string())
+    } else if path.ends_with(".rb") {
+        Some("ruby".to_string())
+    } else if path.ends_with(".php") {
+        Some("php".to_string())
+    } else if path.ends_with(".cs") {
+        Some("csharp".to_string())
+    } else {
+        None
+    }
+}
+
+fn infer_framework(document: &DocumentInput) -> Option<String> {
+    let text = searchable_text(document);
+
+    if text.contains("springframework") || text.contains("@springbootapplication") {
+        Some("spring".to_string())
+    } else if text.contains("react") {
+        Some("react".to_string())
+    } else if text.contains("next") {
+        Some("nextjs".to_string())
+    } else if text.contains("express") {
+        Some("express".to_string())
+    } else if text.contains("tokio") {
+        Some("tokio".to_string())
+    } else {
+        None
+    }
+}
+
+fn document_path(document: &DocumentInput) -> String {
+    document
+        .filename
+        .clone()
+        .unwrap_or_else(|| document.title.clone())
+}
+
+fn searchable_text(document: &DocumentInput) -> String {
+    format!(
+        "{}\n{}\n{}\n{}\n{}",
+        document.id,
+        document.title,
+        document.filename.clone().unwrap_or_default(),
+        document.stated_scope.clone().unwrap_or_default(),
+        content_text(document)
+    )
+    .to_ascii_lowercase()
+}
+
+fn content_text(document: &DocumentInput) -> String {
+    document
+        .content
+        .iter()
+        .map(|content| content.data.clone())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn evidence_id_for_document(document: &DocumentInput) -> String {
+    format!("evidence-{}", normalize_token(&document.id))
+}
+
+fn normalize_token(value: &str) -> String {
+    let slug = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+
+    if slug.is_empty() {
+        "unknown".to_string()
+    } else {
+        slug
+    }
+}
+
+fn canonical_layer(layer: &str) -> &str {
+    match layer {
+        "usecase" | "usecases" => "application",
+        "services" => "service",
+        "web" | "controller" | "controllers" => "api",
+        "adapter" => "adapters",
+        "infra" => "infrastructure",
+        "repository" | "repositories" | "dao" => "persistence",
+        value => value,
+    }
+}
+
+fn domain_name(domain: &Domain) -> &'static str {
+    match domain {
+        Domain::Application => "application",
+        Domain::Integration => "integration",
+        Domain::Data => "data",
+        Domain::Infrastructure => "infrastructure",
+        Domain::Security => "security",
+        Domain::Enterprise => "enterprise",
+    }
+}
+
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
+fn cleanup_context_line(line: &str) -> String {
+    line.trim()
+        .trim_start_matches("- ")
+        .trim_start_matches("* ")
+        .trim_start_matches("# ")
+        .trim()
+        .to_string()
+}
+
+fn unique(values: Vec<String>) -> Vec<String> {
+    values
+        .into_iter()
+        .filter(|value| !value.trim().is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 fn media_type_for_path(path: &Path) -> &'static str {
     match path
         .extension()
@@ -785,27 +1905,5 @@ fn media_type_for_path(path: &Path) -> &'static str {
         Some("tf") | Some("tfvars") => "text/x-terraform",
         Some("sh") | Some("bash") | Some("zsh") | Some("fish") => "text/x-shellscript",
         _ => "text/plain",
-    }
-}
-
-fn document_id_for_path(path: &Path) -> String {
-    let normalized = path.to_string_lossy();
-    let slug: String = normalized
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect();
-
-    let trimmed = slug.trim_matches('-');
-
-    if trimmed.is_empty() {
-        "document".to_string()
-    } else {
-        format!("document-{trimmed}")
     }
 }

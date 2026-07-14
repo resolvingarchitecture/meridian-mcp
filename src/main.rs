@@ -287,11 +287,58 @@ fn scan_into_cached_request(root_dir: &str) -> Result<CachedArchitectureReviewRe
         cache::get()?.unwrap_or_else(|| CachedArchitectureReviewRequest::new(Uuid::new_v4()));
 
     cached.upsert_documents(documents);
-    synchronize_documents_into_model(&mut cached);
+
+    let discovered_model = documents::discover_architecture_model(
+        cached.request.context_id,
+        &cached.request.documents,
+    );
+
+    cached.request.architecture_model = merge_cached_context_into_discovered_model(
+        cached.request.architecture_model.context.clone(),
+        discovered_model,
+    );
 
     cache::set(&cached).with_context(|| format!("failed to cache architecture review request"))?;
 
     Ok(cached)
+}
+
+fn merge_cached_context_into_discovered_model(
+    cached_context: ArchitectureContext,
+    mut discovered_model: crate::models::ArchitectureModel,
+) -> crate::models::ArchitectureModel {
+    discovered_model.context = ArchitectureContext {
+        context_id: cached_context
+            .context_id
+            .or(discovered_model.context.context_id),
+        organization_context: cached_context
+            .organization_context
+            .or(discovered_model.context.organization_context),
+        business_goals: cached_context
+            .business_goals
+            .or(discovered_model.context.business_goals),
+        stakeholders: cached_context
+            .stakeholders
+            .or(discovered_model.context.stakeholders),
+        decisions: cached_context
+            .decisions
+            .or(discovered_model.context.decisions),
+        constraints: cached_context
+            .constraints
+            .or(discovered_model.context.constraints),
+        risks: cached_context.risks.or(discovered_model.context.risks),
+        standards: cached_context
+            .standards
+            .or(discovered_model.context.standards),
+        scope_notes: cached_context
+            .scope_notes
+            .or(discovered_model.context.scope_notes),
+        freeform_notes: cached_context
+            .freeform_notes
+            .or(discovered_model.context.freeform_notes),
+    };
+
+    discovered_model
 }
 
 fn synchronize_documents_into_model(cached: &mut CachedArchitectureReviewRequest) {
