@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-pub const DEFAULT_BACKEND_URL: &str = "https://resolvingarchitecture.io/meridian/api";
+pub const DEFAULT_BACKEND_URL: &str = "https://resolvingarchitecture.io/apps/meridian/api";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct MeridianConfig {
