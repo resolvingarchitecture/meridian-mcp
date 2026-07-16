@@ -5,7 +5,7 @@ use crate::models::{
     HealthHeartbeat, RequestApiKeyRequest,
 };
 use anyhow::{Context, Result};
-use reqwest::Client;
+use reqwest::{Client, Method, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::{Arc, OnceLock};
@@ -25,6 +25,8 @@ const BITCOIN_PAYMENT_REQUEST_PATH: &str = "/api/payment/request/bitcoin";
 const BITCOIN_PAYMENT_STATUS_PATH: &str = "/api/payment/request/bitcoin/status";
 const REVIEW_PATH: &str = "/api/skills/review";
 const SESSION_EXPIRY_SAFETY_MARGIN_MILLIS: u64 = 30_000;
+const MAX_RETRY_ATTEMPTS: usize = 5;
+const RETRY_DELAYS_MILLIS: [u64; 5] = [500, 1_000, 2_000, 4_000, 8_000];
 
 #[derive(Debug, Clone, Serialize)]
 struct AuthNRequest {
@@ -82,6 +84,70 @@ fn session_bearer_token(session_id: &str) -> String {
     }
 }
 
+fn retry_delay(attempt: usize) -> Duration {
+    let index = attempt.saturating_sub(1).min(RETRY_DELAYS_MILLIS.len() - 1);
+    Duration::from_millis(RETRY_DELAYS_MILLIS[index])
+}
+
+fn is_retryable_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE | StatusCode::GATEWAY_TIMEOUT
+    )
+}
+
+fn is_retryable_error(error: &reqwest::Error) -> bool {
+    error.is_connect() || error.is_timeout() || error.is_request()
+}
+
+async fn wait_before_retry(attempt: usize) {
+    tokio::time::sleep(retry_delay(attempt)).await;
+}
+
+async fn send_with_retry(
+    method: Method,
+    url: &str,
+    bearer_token: Option<String>,
+    body: Option<Value>,
+) -> Result<Response> {
+    let mut last_error: Option<reqwest::Error> = None;
+
+    for attempt in 1..=MAX_RETRY_ATTEMPTS {
+        let mut request = http().request(method.clone(), url);
+
+        if let Some(token) = bearer_token.as_ref() {
+            request = request.bearer_auth(token);
+        }
+
+        if let Some(payload) = body.as_ref() {
+            request = request.json(payload);
+        }
+
+        match request.send().await {
+            Ok(response) => {
+                if !is_retryable_status(response.status()) || attempt == MAX_RETRY_ATTEMPTS {
+                    return Ok(response);
+                }
+
+                wait_before_retry(attempt).await;
+            }
+            Err(error) => {
+                if !is_retryable_error(&error) || attempt == MAX_RETRY_ATTEMPTS {
+                    return Err(error).context("failed to reach backend");
+                }
+
+                last_error = Some(error);
+                wait_before_retry(attempt).await;
+            }
+        }
+    }
+
+    match last_error {
+        Some(error) => Err(error).context("failed to reach backend after retries"),
+        None => anyhow::bail!("backend remained unavailable after retries"),
+    }
+}
+
 async fn session_id(api_key: &str, backend_url: &str) -> Result<String> {
     let refreshable_session = {
         let session = session_cache().lock().await;
@@ -120,12 +186,14 @@ async fn login_result(api_key: &str, backend_url: &str) -> Result<AuthNResult> {
         password: None,
     };
 
-    let response = http()
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .context("failed to reach backend login endpoint")?;
+    let response = send_with_retry(
+        Method::POST,
+        &url,
+        None,
+        Some(serde_json::to_value(&body).context("failed to serialize backend login request")?),
+    )
+    .await
+    .context("failed to reach backend login endpoint")?;
 
     match response.status() {
         s if s.is_success() => {
@@ -166,10 +234,7 @@ async fn refresh_session(current_session_id: &str, backend_url: &str) -> Result<
     let url = format!("{backend_url}{SESSION_REFRESH}");
     let bearer_token = session_bearer_token(current_session_id);
 
-    let response = http()
-        .post(&url)
-        .bearer_auth(bearer_token)
-        .send()
+    let response = send_with_retry(Method::POST, &url, Some(bearer_token), None)
         .await
         .context("failed to reach backend session refresh endpoint")?;
 
@@ -215,12 +280,9 @@ pub async fn logout() -> Result<()> {
     let url = format!("{backend_url}{LOGOUT_PATH}");
     let bearer_token = session_bearer_token(&current_session_id);
 
-    let response = http()
-        .post(&url)
-        .bearer_auth(bearer_token)
-        .send()
-        .await
-        .context("failed to reach backend logout endpoint")?;
+    let response = send_with_retry(Method::POST, &url, Some(bearer_token), None)
+            .await
+            .context("failed to reach backend logout endpoint")?;
 
     invalidate_session().await;
 
@@ -238,12 +300,14 @@ pub async fn create_account(request: CreateAccountRequest) -> Result<()> {
     let backend_url = crate::config::backend_url()?;
     let url = format!("{backend_url}{CREATE_ACCOUNT_PATH}");
 
-    let response = http()
-        .post(&url)
-        .json(&request)
-        .send()
-        .await
-        .context("failed to reach backend account creation endpoint")?;
+    let response = send_with_retry(
+        Method::POST,
+        &url,
+        None,
+        Some(serde_json::to_value(&request).context("failed to serialize backend account creation request")?),
+    )
+    .await
+    .context("failed to reach backend account creation endpoint")?;
 
     match response.status() {
         s if s.is_success() => {
@@ -353,12 +417,14 @@ async fn login_with_username_password(
         password: Some(password.to_string()),
     };
 
-    let response = http()
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .context("failed to reach backend login endpoint")?;
+    let response = send_with_retry(
+        Method::POST,
+        &url,
+        None,
+        Some(serde_json::to_value(&body).context("failed to serialize backend login request")?),
+    )
+    .await
+    .context("failed to reach backend login endpoint")?;
 
     match response.status() {
         s if s.is_success() => response
@@ -386,10 +452,12 @@ async fn login_with_username_password(
 async fn request_api_key_with_session(backend_url: &str, session_id: &str) -> Result<String> {
     let url = format!("{backend_url}{API_KEY_PATH}");
 
-    let response = http()
-        .get(&url)
-        .bearer_auth(session_bearer_token(session_id))
-        .send()
+    let response = send_with_retry(
+            Method::GET,
+            &url,
+            Some(session_bearer_token(session_id)),
+            None,
+        )
         .await
         .context("failed to reach backend API key endpoint")?;
 
@@ -433,23 +501,18 @@ async fn send_backend_request(
     body: &ArchitectureReviewRequest,
 ) -> Result<reqwest::Response> {
     let bearer_token = session_bearer_token(session_id);
-    http()
-        .post(url)
-        .bearer_auth(bearer_token)
-        .json(body)
-        .send()
+    send_with_retry(
+            Method::POST,
+            url,
+            Some(bearer_token),
+            Some(serde_json::to_value(body).context("failed to serialize backend review request")?),
+        )
         .await
-        .context("failed to reach backend")
 }
 
 async fn send_authenticated_get(url: &str, session_id: &str) -> Result<reqwest::Response> {
     let bearer_token = session_bearer_token(session_id);
-    http()
-        .get(url)
-        .bearer_auth(bearer_token)
-        .send()
-        .await
-        .context("failed to reach backend")
+    send_with_retry(Method::GET, url, Some(bearer_token), None).await
 }
 
 async fn authenticated_get(url: &str) -> Result<reqwest::Response> {
@@ -540,7 +603,7 @@ pub async fn test_backend_health() -> Result<HealthHeartbeat> {
     let backend_url = crate::config::backend_url()?;
     let url = format!("{backend_url}{HEALTH_HEARTBEAT_PATH}");
 
-    let response = match http().get(&url).send().await {
+    let response = match send_with_retry(Method::GET, &url, None, None).await {
         Ok(response) => response,
         Err(_) => {
             return Ok(HealthHeartbeat {
