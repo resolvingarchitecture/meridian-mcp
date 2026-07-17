@@ -142,7 +142,7 @@ cargo test
 # "env": { "MERIDIAN_BACKEND_URL": "http://localhost:8080", ... }
 ```
 
-## Architecture
+## Application Package Structure
 
 ```
 src/
