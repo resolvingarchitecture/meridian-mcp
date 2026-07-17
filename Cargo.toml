@@ -8,6 +8,10 @@ license     = "MIT"
 repository  = "https://github.com/resolvingarchitecture/meridian-mcp"
 keywords    = ["mcp", "architecture", "code-review", "ai"]
 
+[lib]
+name = "meridian_mcp"
+path = "src/lib.rs"
+
 [[bin]]
 name = "meridian-mcp"
 path = "src/main.rs"
@@ -57,3 +61,6 @@ hex             = "0.4"
 tracing         = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 urlencoding     = "2"
+
+[dev-dependencies]
+assert_fs = "1"

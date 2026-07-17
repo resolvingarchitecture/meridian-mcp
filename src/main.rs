@@ -280,7 +280,7 @@ fn scan_into_cached_request(root_dir: &str) -> Result<CachedArchitectureReviewRe
         anyhow::bail!("not a directory: {root_dir}");
     }
 
-    let documents = scanner::scan(path)
+    let documents = scanner::scan_documents(path)
         .with_context(|| format!("failed to scan architecture documents for: {root_dir}"))?;
 
     let mut cached =

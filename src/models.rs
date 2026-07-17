@@ -504,6 +504,40 @@ impl ArchitectureModel {
             warnings: Vec::new(),
         }
     }
+
+    pub fn from_component(component: ArchitectureComponent) -> Self {
+        let context_id = Uuid::new_v4();
+
+        Self {
+            context_id: Some(context_id),
+            context: ArchitectureContext::new_with_context_id(context_id),
+            global_observations: component.observations.clone(),
+            components: vec![component],
+            relationships: Vec::new(),
+            evidence: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    pub fn has_adrs(&self) -> bool {
+        self.global_observations.has_adrs()
+            || self
+                .components
+                .iter()
+                .any(|component| component.observations.has_adrs())
+    }
+
+    pub fn style_summary(&self) -> String {
+        self.global_observations
+            .style
+            .clone()
+            .or_else(|| {
+                self.components
+                    .iter()
+                    .find_map(|component| component.observations.style.clone())
+            })
+            .unwrap_or_else(|| "unknown".to_string())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
