@@ -15,7 +15,7 @@ cargo install --path .
 cargo install meridian-mcp
 
 # Via install script (macOS / Linux)
-curl -fsSL https://resolvingarchitecture.io/meridian/install.sh | sh
+curl -fsSL https://resolvingarchitecture.io/apps/meridian/downloads/meridian-mcp/install.sh | sh
 
 # Or download a binary from GitHub Releases
 ```
@@ -70,7 +70,7 @@ Use this to inspect what Meridian has cached locally after `scan_project`.
 Returns:
 
 ```json
-{ a
+{ 
   "status": "ok", 
   "context_id": "00000000-0000-0000-0000-000000000000", 
   "document_count": 12, 
@@ -118,11 +118,11 @@ Clears the cached architecture model. Use after major refactors.
 
 ## Environment variables
 
-| Variable               | Required | Default                                           | Description                                              |
-|------------------------|----------|---------------------------------------------------|----------------------------------------------------------|
-| `MERIDIAN_API_KEY`     | Yes      | —                                                 | Your API key from resolvingarchitecture.io/meridian      |
-| `MERIDIAN_BACKEND_URL` | No       | `https://resolvingarchitecture.io/meridian/api`   | Backend URL                                              |
-| `MERIDIAN_LOG`         | No       | `meridian_mcp=info`                               | Log level (to stderr)                                    |
+| Variable               | Required | Default                                              | Description                                              |
+|------------------------|----------|------------------------------------------------------|----------------------------------------------------------|
+| `MERIDIAN_API_KEY`     | Yes      | —                                                    | Your API key from resolvingarchitecture.io/meridian      |
+| `MERIDIAN_BACKEND_URL` | No       | `https://resolvingarchitecture.io/apps/meridian/api` | Backend URL                                              |
+| `MERIDIAN_LOG`         | No       | `meridian_mcp=info`                                  | Log level (to stderr)                                    |
 
 ## Development
 
@@ -149,12 +149,12 @@ src/
   main.rs           — MCP server, tool registration
   agent.rs          — HTTP call to Java backend
   cache.rs          — sled embedded cache (~/.cache/meridian/)
+  config.rs         - configuration
   scanner/
     mod.rs          — scan() entry point, ArchModel definition
     walker.rs       — file system traversal, layer inference
-    imports.rs      — tree-sitter import graph + topological sort
-    patterns.rs     — architectural pattern detection
-    adrs.rs         — ADR and architecture doc harvesting
+    documents.rs    — document detection
+    adrs.rs         — ADR known locations
 tests/
   scanner_test.rs   — integration tests with fixture projects
 ```
