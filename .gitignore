@@ -21,3 +21,5 @@ target
 #.idea/
 .env
 deploy_script.sh
+DESIGN.md
+TODO.md
