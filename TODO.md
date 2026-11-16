@@ -44,7 +44,7 @@ The v1 contract is `meridian-docs/architecture/mcp-api.md` (proposed). The backe
 
 ## MCP surface
 
-- [ ] Set the server name and version (currently reports `rmcp`) and add usage instructions.
+- [x] Set the server name and version (`meridian-mcp`) and add usage instructions for agents.
 - [ ] Tool annotations (read-only versus writing) and clear descriptions for agent use.
 - [ ] Structured output schemas for tool results, not just text.
 - [ ] Decide on MCP resources or prompts (for example, the open-questions list) versus tools only.
@@ -66,8 +66,10 @@ The v1 contract is `meridian-docs/architecture/mcp-api.md` (proposed). The backe
 
 ## Build and distribution
 
-- [ ] Cross-compile and test on Windows, macOS (x86_64, aarch64), and Linux (x86_64, aarch64).
-- [ ] Release profile tuning (LTO, strip, small binary) and size budget.
+- [x] Workflow that builds and smoke-tests Linux x86_64, Windows x86_64, and macOS arm64 and x86_64 on real
+      runners (`.github/workflows/release.yml`). Not run yet: it has to be pushed to GitHub first.
+- [ ] Linux arm64 and Windows arm64 builds.
+- [x] Release profile tuning (thin LTO, strip): the Linux binary is about 7.5 MB.
 - [ ] Code signing and notarization (Windows Authenticode, macOS notarization).
 - [ ] Installers and update path (Homebrew, winget, direct download, `cargo install`).
 - [ ] CI: build matrix, clippy, rustfmt, tests, dependency audit (`cargo audit`/`deny`).
@@ -85,3 +87,16 @@ The v1 contract is `meridian-docs/architecture/mcp-api.md` (proposed). The backe
 
 - [ ] Real (anonymized) example session in this README once the backend is live.
 - [ ] MCP registry listings (`meridian-docs/marketing/TODO.md`) after the first release build.
+
+## Website download (2026-11-16)
+
+- [x] Download section on `/meridian/` for Linux, Windows, and both macOS CPUs, with `SHA256SUMS`, setup
+      steps, and the not-signed warning. `marketing/publish-meridian-mcp.sh` places the packages and
+      `deploy_script.sh` refuses to deploy while the page links to files that are not there.
+- [x] Default API URL fixed to `https://resolvingarchitecture.io/apps/meridian/api` (the old default did not
+      match the production path).
+- [ ] Run the release workflow, download the artifacts, publish, and deploy.
+- [ ] Decide the license and ship a `LICENSE.txt` in each package (none is included yet).
+- [ ] Ship `THIRD-PARTY-NOTICES.txt` (for example with `cargo-about`); the other downloads have one.
+- [ ] Code-sign Windows (Authenticode) and sign and notarize macOS, so the warnings go away.
+- [ ] Try the connector from real MCP clients (Claude Code, Cursor, and others); only a test driver has been used.

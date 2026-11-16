@@ -12,7 +12,7 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Result<Self> {
         let api_url = std::env::var("MERIDIAN_API_URL")
-            .unwrap_or_else(|_| "https://resolvingarchitecture.io/meridian/api".to_string());
+            .unwrap_or_else(|_| "https://resolvingarchitecture.io/apps/meridian/api".to_string());
         let api_key = std::env::var("MERIDIAN_API_KEY")
             .context("MERIDIAN_API_KEY is not set; create an API key in meridian-web")?;
         Ok(Self { api_url, api_key })

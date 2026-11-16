@@ -51,10 +51,10 @@ optional `passphrase`; `meridian_projects` needs a passphrase only to create.
 
 ## Configuration
 
-| Variable           | Purpose                                          | Default                                         |
-|--------------------|--------------------------------------------------|-------------------------------------------------|
-| `MERIDIAN_API_KEY` | API key created in `meridian-web` (never logged) | required                                        |
-| `MERIDIAN_API_URL` | Backend base URL                                 | `https://resolvingarchitecture.io/meridian/api` |
+| Variable           | Purpose                                          | Default                                              |
+|--------------------|--------------------------------------------------|------------------------------------------------------|
+| `MERIDIAN_API_KEY` | API key created in `meridian-web` (never logged) | required                                             |
+| `MERIDIAN_API_URL` | Backend base URL                                 | `https://resolvingarchitecture.io/apps/meridian/api` |
 
 ## Build and run
 
@@ -77,6 +77,24 @@ Register it with an MCP client by pointing the client at the binary:
   }
 }
 ```
+
+## Download and release
+
+The packages are built on real Linux, Windows, and macOS runners by `.github/workflows/release.yml`
+(run it by hand, or push a `v*` tag), and each binary is smoke-tested on the OS it was built for
+(`packaging/smoke.py`: `--version`, an MCP handshake, and the five tools).
+
+| Package                                 | Built on     | Notes                                           |
+|-----------------------------------------|--------------|-------------------------------------------------|
+| `meridian-mcp-<version>-linux-x86_64`   | ubuntu-22.04 | `.tar.gz`; needs glibc 2.34 or newer            |
+| `meridian-mcp-<version>-windows-x86_64` | windows-2022 | `.zip`; MSVC build                              |
+| `meridian-mcp-<version>-macos-arm64`    | macos-14     | `.tar.gz`; Apple silicon                        |
+| `meridian-mcp-<version>-macos-x86_64`   | macos-14     | `.tar.gz`; cross-compiled, tested under Rosetta |
+
+To publish to the Meridian site: download the workflow's artifacts into `dist/`
+(`gh run download <run-id> -D dist --pattern 'meridian-mcp-*'`), then run
+`marketing/publish-meridian-mcp.sh` and `marketing/deploy_script.sh`. `./package.sh` builds and
+smoke-tests a package for the current machine only. The builds are not code-signed or notarized.
 
 ## Layout
 

@@ -2,10 +2,10 @@
 //! `meridian_evaluate`, `meridian_model`. Each forwards to the backend.
 
 use rmcp::{
-    ErrorData as McpError,
+    ErrorData as McpError, ServerHandler,
     handler::server::wrapper::Parameters,
-    model::{CallToolResult, ContentBlock},
-    tool, tool_router,
+    model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig},
+    tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -129,7 +129,7 @@ impl MeridianTools {
 }
 
 
-#[tool_router(server_handler)]
+#[tool_router]
 impl MeridianTools {
     #[tool(description = "List the Meridian projects you can use (action `list`, the default), or \
         create a new one (action `create`, with a name and a passphrase the user chooses). Call \
@@ -236,5 +236,23 @@ impl MeridianTools {
             None,
         )
         .await
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for MeridianTools {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("meridian-mcp", env!("CARGO_PKG_VERSION")))
+            .with_instructions(
+                "Meridian captures a project's architecture through an interview. Start with \
+                 `meridian_projects` to find or create the project. Then call `meridian_next` \
+                 repeatedly: it returns what is missing as questions. Answer from the repository \
+                 where you can and ask the user where you cannot, then pass the answers back (as \
+                 `answers` on `meridian_next`, or as facts with `meridian_submit`). Never send source \
+                 code: send observations (paths, counts, short summaries). Tools that read or write \
+                 the model need the user's Architecture Passphrase; if a tool returns \
+                 `passphrase_required`, ask the user for it and retry. Never invent a passphrase.",
+            )
     }
 }
