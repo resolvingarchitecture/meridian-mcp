@@ -1,0 +1,8 @@
+# backup.exclude — paths left out of the Meridian backup (read by ../backup.sh).
+# One tar pattern per line, relative to this project. Blank lines and # comments are ignored.
+#   name      matches that name at any depth
+#   /path     matches only at this project root
+# List only what can be regenerated from source; never list source, .git, or secrets.
+
+# Cargo build output
+/target

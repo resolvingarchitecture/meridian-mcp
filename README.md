@@ -1,0 +1,95 @@
+# meridian-mcp
+
+The agent-facing interface to Meridian. One native Rust binary for Windows, macOS, and Linux
+that an agent talks to over MCP (stdio) and that talks to `meridian-backend` over HTTPS.
+
+Decision record: `meridian-docs/architecture/adr/ADR-AppArch-25-Agent-Interview-Loop-Via-Rust-MCP.md`.
+Backend counterpart: `meridian-backend/DESIGN.md` §4.14. Wire contract:
+`meridian-docs/architecture/mcp-api.md`.
+
+## What it does
+
+People should not type architecture information into a UI and keep it current by hand. An agent
+calls `meridian-mcp`; the backend works out where the project stands in designing and maintaining
+its architecture and returns what is missing as questions. The agent answers from the repository
+or asks the user, and the answers go back to the backend.
+
+```text
+agent --stdio MCP--> meridian-mcp --HTTPS--> meridian-backend
+  1. meridian_next(project, observations)
+  2. backend updates the completeness map and returns phase, gaps, and next questions
+  3. agent answers from the repo or asks the user, then calls meridian_submit / meridian_next again
+```
+
+## Principles
+
+- **Stateless client.** No local copy of the Architecture Model, no AI calls. The backend owns the
+  model, the gap rules, entitlements, and payments.
+- **Deterministic gap detection.** The backend's rules decide what is missing and what to ask; an
+  LLM may only phrase questions. Same observations in, same questions out.
+- **Local scanning stays local.** Repository scanning happens on the user's machine. Only
+  structured observations (paths, counts, summaries) are sent, never raw source.
+- **Direct entry.** Facts submitted through the tools enter the model immediately, with provenance.
+  There is no approval step.
+- **The agent supplies the passphrase.** Tools that touch the model accept the Architecture
+  Passphrase. When it is missing the tool returns `passphrase_required`; the agent asks the user
+  and retries. The binary keeps it in process memory only and never writes it to disk or logs it.
+- **One binary, three uses.** The MCP server, the CLI, and the CI step are the same executable.
+
+## Tools
+
+| Tool                | Purpose                                                               | Entitlement |
+|---------------------|-----------------------------------------------------------------------|-------------|
+| `meridian_projects` | List your projects, or create one (the user chooses its passphrase)   | Free        |
+| `meridian_next`     | Submit observations; get phase, gaps, inconsistencies, next questions | Free        |
+| `meridian_submit`   | Submit facts or answers with source and confidence                    | Free        |
+| `meridian_evaluate` | Run an entitled service (review, feasibility, and so on)              | Per service |
+| `meridian_model`    | Read the current model, completeness map, findings, and decisions     | Free        |
+
+Call `meridian_projects` first to get the `project` ID. Every other tool takes that `project` and an
+optional `passphrase`; `meridian_projects` needs a passphrase only to create.
+
+## Configuration
+
+| Variable           | Purpose                                          | Default                                         |
+|--------------------|--------------------------------------------------|-------------------------------------------------|
+| `MERIDIAN_API_KEY` | API key created in `meridian-web` (never logged) | required                                        |
+| `MERIDIAN_API_URL` | Backend base URL                                 | `https://resolvingarchitecture.io/meridian/api` |
+
+## Build and run
+
+```bash
+cd meridian-mcp
+cargo build --release
+MERIDIAN_API_KEY=... ./target/release/meridian-mcp serve   # MCP server on stdio (the default)
+```
+
+Register it with an MCP client by pointing the client at the binary:
+
+```json
+{
+  "mcpServers": {
+    "meridian": {
+      "command": "/path/to/meridian-mcp",
+      "args": ["serve"],
+      "env": { "MERIDIAN_API_KEY": "..." }
+    }
+  }
+}
+```
+
+## Layout
+
+| Path             | Purpose                                                 |
+|------------------|---------------------------------------------------------|
+| `src/main.rs`    | CLI entry point (Clap) and stdio MCP server startup     |
+| `src/tools.rs`   | The four MCP tools, each forwarding to the backend      |
+| `src/backend.rs` | HTTPS client for `meridian-backend`; classifies replies |
+| `src/session.rs` | In-memory passphrase holder (never persisted)           |
+| `src/config.rs`  | Environment configuration                               |
+
+## Status
+
+Scaffold. The MCP handshake and the four tools work end to end against a stub; the backend
+endpoints are specified in `meridian-docs/architecture/mcp-api.md` (v1, proposed) and not built
+yet. See `TODO.md`.
