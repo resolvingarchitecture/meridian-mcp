@@ -62,7 +62,15 @@ jobs:
           cp packaging/README.txt "dist/$NAME/README.txt"
           cd dist
           if [ "${{ matrix.format }}" = "zip" ]; then
-            powershell -NoProfile -Command "Compress-Archive -Path '$NAME' -DestinationPath '$NAME.zip'"
+            # Python writes standard forward-slash paths; PowerShell's Compress-Archive writes backslashes,
+            # which other systems' unzip tools extract as file names containing backslashes.
+            python3 - "$NAME" <<'PY'
+          import os, sys, zipfile
+          name = sys.argv[1]
+          with zipfile.ZipFile(name + ".zip", "w", zipfile.ZIP_DEFLATED) as z:
+              for entry in sorted(os.listdir(name)):
+                  z.write(os.path.join(name, entry), f"{name}/{entry}")
+          PY
             FILE="$NAME.zip"
           else
             tar -czf "$NAME.tar.gz" "$NAME"
