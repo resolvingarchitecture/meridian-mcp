@@ -8,7 +8,7 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use reqwest::Method;
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -21,16 +21,120 @@ pub struct MeridianTools {
     session: Session,
 }
 
+/// What kind of finding an observation is.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ObservationKind {
+    Repository,
+    Module,
+    Dependency,
+    EntryPoint,
+    Build,
+    Deployment,
+    Api,
+    DataStore,
+    Document,
+    Diagram,
+}
+
+/// A structured finding about the project, found by looking at it locally.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Observation {
+    /// Optional. If you leave it out, a stable one is made from the kind and path, so sending the
+    /// same finding again does not duplicate it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// What kind of finding this is. Use the field name `kind`.
+    #[serde(alias = "type")]
+    pub kind: ObservationKind,
+    /// Repository-relative path, when the finding has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// A short description of the finding, at most 2000 characters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Small scalar values and counts, at most 32 keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attributes: Option<serde_json::Map<String, Value>>,
+    /// A hash of the underlying content, so unchanged findings can be recognized.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    /// For `DOCUMENT` and `DIAGRAM` only: the text of the architecture document (an ADR, a design doc,
+    /// diagram source), up to 256 KiB.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+}
+
+/// An answer to a question that `meridian_next` returned.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Answer {
+    /// The `questionId` of the question you are answering, for example `q-RISK-1`.
+    pub question_id: String,
+    /// The answer. Follow the question's `answerExample` and `answerFormat`: an object like the
+    /// example, a list of such objects, or, when `answerFormat` says so, a plain string.
+    pub value: Value,
+}
+
+/// The kind of architecture fact being submitted.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FactCategory {
+    Scope,
+    BusinessGoal,
+    Stakeholder,
+    Concern,
+    QualityAttribute,
+    Constraint,
+    Component,
+    Relationship,
+    Decision,
+    Risk,
+    Standard,
+}
+
+/// Where a fact came from.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FactSource {
+    CodeScan,
+    UserAnswer,
+    ImportedDocument,
+}
+
+/// An architecture fact to record. It enters the model directly.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Fact {
+    /// The kind of fact.
+    pub category: FactCategory,
+    /// The fact itself, as an object shaped like the `answerExample` Meridian gives for that category.
+    pub data: serde_json::Map<String, Value>,
+    /// Where it came from. Defaults to `USER_ANSWER`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<FactSource>,
+    /// How sure you are, 0 to 1. Kept as a note; Meridian assigns its own confidence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimed_confidence: Option<f64>,
+    /// IDs of the observations this fact came from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observation_ids: Option<Vec<String>>,
+    /// The `questionId` this answers, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub question_id: Option<String>,
+}
+
 #[derive(Deserialize, JsonSchema)]
 pub struct NextParams {
-    /// Meridian project (architecture context) ID.
+    /// Meridian project (architecture context) ID, from `meridian_projects`.
     pub project: String,
-    /// Structured observations about the project (paths, counts, short summaries, and the text of architecture documents such as ADRs).
+    /// Findings about the project: paths, counts, short summaries, and the text of architecture documents.
     #[serde(default)]
-    pub observations: Vec<Value>,
-    /// Answers to earlier questions: `{ "questionId": "...", "value": ... }`.
+    pub observations: Vec<Observation>,
+    /// Answers to questions from an earlier call. They enter the model directly.
     #[serde(default)]
-    pub answers: Vec<Value>,
+    pub answers: Vec<Answer>,
     /// The user's Architecture Passphrase. Ask the user if you do not have it.
     pub passphrase: Option<String>,
 }
@@ -38,8 +142,8 @@ pub struct NextParams {
 #[derive(Deserialize, JsonSchema)]
 pub struct SubmitParams {
     pub project: String,
-    /// Facts or answers to questions, each with its source and confidence.
-    pub facts: Vec<Value>,
+    /// Facts to record. They enter the Architecture Model directly; there is no approval step.
+    pub facts: Vec<Fact>,
     /// Model version from a previous read; the write fails if the model has moved on.
     pub if_match: Option<u64>,
     pub passphrase: Option<String>,
@@ -159,8 +263,9 @@ impl MeridianTools {
     }
 
     #[tool(description = "Submit observations (and answers to earlier questions) about the project \
-        and get back the current phase, the gaps in the architecture, and the next questions. \
-        Call repeatedly until `done` is true.")]
+        and get back the current phase, the gaps in the architecture, and the next questions. Every \
+        question carries an `answerExample` and an `answerFormat`: answer in that shape. Call \
+        repeatedly until `done` is true.")]
     async fn meridian_next(&self, p: Parameters<NextParams>) -> Result<CallToolResult, McpError> {
         let p = p.0;
         let idempotent = !p.answers.is_empty();
@@ -249,7 +354,8 @@ impl ServerHandler for MeridianTools {
                  `meridian_projects` to find or create the project. Then call `meridian_next` \
                  repeatedly: it returns what is missing as questions. Answer from the repository \
                  where you can and ask the user where you cannot, then pass the answers back (as \
-                 `answers` on `meridian_next`, or as facts with `meridian_submit`). Send observations \
+                 `answers` on `meridian_next`, or as facts with `meridian_submit`). Every question comes with an \
+                 `answerExample`; answer in that shape. Send observations \
                  about the project: paths, counts, short summaries, and the text of architecture documents. Tools that read or write \
                  the model need the user's Architecture Passphrase; if a tool returns \
                  `passphrase_required`, ask the user for it and retry. Never invent a passphrase.",

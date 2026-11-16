@@ -51,9 +51,18 @@ def main():
     info = replies[1]["result"]["serverInfo"]
     if info.get("name") != "meridian-mcp" or info.get("version") != reported:
         fail(f"serverInfo {info} does not match --version {reported}")
-    tools = {t["name"] for t in replies[2]["result"]["tools"]}
+    tool_list = replies[2]["result"]["tools"]
+    tools = {t["name"] for t in tool_list}
     if tools != EXPECTED_TOOLS:
         fail(f"tools {sorted(tools)} != {sorted(EXPECTED_TOOLS)}")
+    # Agents must be shown the exact field names and allowed values, not guess them.
+    schemas = {t["name"]: json.dumps(t.get("inputSchema", {})) for t in tool_list}
+    for needle in ("MODULE", "DOCUMENT", "questionId", "kind"):
+        if needle not in schemas["meridian_next"]:
+            fail(f"meridian_next schema does not mention {needle}")
+    for needle in ("QUALITY_ATTRIBUTE", "RELATIONSHIP", "category", "data"):
+        if needle not in schemas["meridian_submit"]:
+            fail(f"meridian_submit schema does not mention {needle}")
     print(f"smoke test passed: meridian-mcp {reported}, {len(tools)} tools")
 
 

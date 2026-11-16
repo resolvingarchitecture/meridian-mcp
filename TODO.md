@@ -100,3 +100,15 @@ The v1 contract is `meridian-docs/architecture/mcp-api.md` (proposed). The backe
 - [ ] Ship `THIRD-PARTY-NOTICES.txt` (for example with `cargo-about`); the other downloads have one.
 - [ ] Code-sign Windows (Authenticode) and sign and notarize macOS, so the warnings go away.
 - [ ] Try the connector from real MCP clients (Claude Code, Cursor, and others); only a test driver has been used.
+
+## Real-client test (2026-11-16)
+
+- [x] Claude Code connected, loaded all five tools, listed projects, asked for the passphrase instead of guessing,
+      and ran the interview loop against a local backend with no tool errors.
+- [x] First run: observations and structured answers were rejected because the tool inputs were untyped and
+      questions gave no answer shape. Fixed: typed tool schemas (allowed kinds, field names), optional
+      observation ids (generated from kind and path), an `answerExample` and `answerFormat` on every question,
+      and rejection messages that name the allowed values. Second run: nothing rejected, 7 turns instead of 12.
+- [ ] Try other MCP clients (Cursor and others); only Claude Code has been used.
+- [ ] Re-publish the downloads with these fixes (the published packages predate them).
+
