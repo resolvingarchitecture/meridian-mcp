@@ -22,10 +22,10 @@ This program is the connector (an MCP server) between your agent and Meridian.
 4. Restart your agent and ask it to list your Meridian projects.
 
 What it does and does not do
-- Scanning happens on your machine. Meridian receives structured observations (paths, counts,
-  short summaries), not your source code.
-- Your model is encrypted under a passphrase only you hold; your agent asks you for it. It is
-  kept in memory only and cannot be recovered if you lose it.
+- Meridian needs your project's source to review and evaluate your architecture.
+- Your architecture model is encrypted at rest under a key derived from your passphrase, so
+  Meridian cannot read it without that passphrase. Your agent asks you for the passphrase; the
+  connector keeps it in memory only. It cannot be recovered if you lose it.
 - Settings: MERIDIAN_API_KEY (required), MERIDIAN_API_URL (optional, defaults to
   https://resolvingarchitecture.io/apps/meridian/api).
 

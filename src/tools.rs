@@ -25,7 +25,7 @@ pub struct MeridianTools {
 pub struct NextParams {
     /// Meridian project (architecture context) ID.
     pub project: String,
-    /// Structured observations about the project (paths, counts, summaries; never raw source).
+    /// Structured observations about the project (paths, counts, short summaries, and the text of architecture documents such as ADRs).
     #[serde(default)]
     pub observations: Vec<Value>,
     /// Answers to earlier questions: `{ "questionId": "...", "value": ... }`.
@@ -249,8 +249,8 @@ impl ServerHandler for MeridianTools {
                  `meridian_projects` to find or create the project. Then call `meridian_next` \
                  repeatedly: it returns what is missing as questions. Answer from the repository \
                  where you can and ask the user where you cannot, then pass the answers back (as \
-                 `answers` on `meridian_next`, or as facts with `meridian_submit`). Never send source \
-                 code: send observations (paths, counts, short summaries). Tools that read or write \
+                 `answers` on `meridian_next`, or as facts with `meridian_submit`). Send observations \
+                 about the project: paths, counts, short summaries, and the text of architecture documents. Tools that read or write \
                  the model need the user's Architecture Passphrase; if a tool returns \
                  `passphrase_required`, ask the user for it and retry. Never invent a passphrase.",
             )
