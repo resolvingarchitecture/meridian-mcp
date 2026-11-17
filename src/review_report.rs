@@ -226,16 +226,21 @@ pub fn plan(repo_root: &Path, version_override: Option<&str>, result: &Value) ->
         t if !t.is_empty() => t,
         _ => format!("epoch-{}", SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())),
     };
-    let date: String = reviewed_at.chars().take(10).collect();
-    let short_id: String = evaluation_id.chars().take(8).collect();
-    let file_name = format!(
-        "{}-{}-v{}-{}.md",
-        sanitize(&date),
-        sanitize(&service.to_lowercase()),
-        sanitize(&version),
-        sanitize(&short_id)
-    );
+    let stamp = file_stamp(&reviewed_at);
+    let file_name = format!("{}-{}-v{}.md", sanitize(&stamp), sanitize(&service.to_lowercase()), sanitize(&version));
     Ok(Plan { file_name, version, version_source: source, reviewed_at, service, evaluation_id })
+}
+
+/// The time of the review as a file-name prefix that sorts by time: `2026-11-17T19-06-45Z` for a full UTC time,
+/// or just the date when that is all there is. Colons are replaced because some filesystems refuse them.
+fn file_stamp(reviewed_at: &str) -> String {
+    let chars: Vec<char> = reviewed_at.chars().collect();
+    let looks_like_time = chars.len() >= 19 && chars[10] == 'T';
+    if !looks_like_time {
+        return chars.iter().take(10).collect();
+    }
+    let base: String = chars[..19].iter().map(|&c| if c == ':' { '-' } else { c }).collect();
+    if reviewed_at.ends_with('Z') { format!("{base}Z") } else { base }
 }
 
 /// Writes the report into `dest_dir` (created if needed) and returns where it went, or why not. Never
@@ -321,12 +326,19 @@ mod tests {
         let saved = save(&dir.join("meridian"), &dir, None, "proj-1", &result).unwrap();
 
         assert_eq!(saved.version, "1.3.1");
-        assert!(saved.path.ends_with("meridian/2026-11-17-review_full-v1.3.1-abcdef12.md"), "{:?}", saved.path);
+        assert!(saved.path.ends_with("meridian/2026-11-17T01-00-00Z-review_full-v1.3.1.md"), "{:?}", saved.path);
         let text = fs::read_to_string(&saved.path).unwrap();
         assert!(text.starts_with("---\nservice: REVIEW_FULL\nproject_version: 1.3.1\nversion_source: pom.xml\n"));
         assert!(text.contains("architecture_model_version: 6"));
         assert!(text.ends_with("# Review\n\nFindings.\n"));
         assert!(save(&dir.join("meridian"), &dir, None, "proj-1", &result).is_err(), "must not overwrite");
+    }
+
+    #[test]
+    fn the_file_name_carries_the_utc_time_and_falls_back_to_the_date() {
+        assert_eq!(file_stamp("2026-11-17T19:06:45.680684490Z"), "2026-11-17T19-06-45Z");
+        assert_eq!(file_stamp("2026-11-17T19:06:45"), "2026-11-17T19-06-45");
+        assert_eq!(file_stamp("2026-11-17"), "2026-11-17");
     }
 
     #[test]
@@ -343,7 +355,7 @@ mod tests {
         let dir = temp("plan");
         let result = json!({ "service": "REVIEW_FULL", "evaluationId": "abcdef12", "evaluatedAt": "2026-11-17T01:00:00Z", "report": "r" });
         let planned = plan(&dir, Some("1.0.0"), &result).unwrap();
-        assert_eq!(planned.file_name, "2026-11-17-review_full-v1.0.0-abcdef12.md");
+        assert_eq!(planned.file_name, "2026-11-17T01-00-00Z-review_full-v1.0.0.md");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 0, "plan must not write");
 
         let file = dir.join("not-a-dir");
@@ -360,7 +372,7 @@ mod tests {
 
         let moved = move_from_scratch(&scratch, &saved.path, &dest.join("meridian")).unwrap();
 
-        assert!(moved.ends_with("meridian/2026-11-17-review_full-v1.0.0-abcdef12.md"), "{moved:?}");
+        assert!(moved.ends_with("meridian/2026-11-17-review_full-v1.0.0.md"), "{moved:?}");
         assert!(!saved.path.exists(), "the scratch copy is gone");
         assert!(fs::read_to_string(&moved).unwrap().contains("project_version: 1.0.0"));
 

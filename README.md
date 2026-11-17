@@ -63,8 +63,8 @@ server's working directory):
 
 `destinationReason` in the result says why a folder was chosen.
 
-The file is named `<date>-<service>-v<version>-<id>.md`, so reports for different versions sit side by
-side, and starts with front matter that records the project's version at the time of the review
+The file is named `<UTC time>-<service>-v<version>.md` (for example `2026-11-17T19-06-45Z-review_full-v1.3.1.md`), so
+reports sort by time and those for different versions sit side by side, and starts with front matter that records the project's version at the time of the review
 (`project_version`, and `version_source`), the Architecture Model version, the evaluation ID, and the time.
 The version is read from `pom.xml`, `package.json`, `Cargo.toml`, or `pyproject.toml` in `repo_path`
 (default: the server's working directory); pass `version` when the project has none of those. The result's
