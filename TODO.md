@@ -9,6 +9,11 @@ Status key: `[x]` done, `[ ]` open. Decisions are in `ADR-AppArch-25`.
 - [x] Backend HTTPS client (rustls), bearer API key, reply classification.
 - [x] In-memory passphrase session; `passphrase_required` result tells the agent to ask the user.
 - [x] Environment configuration (`MERIDIAN_API_KEY`, `MERIDIAN_API_URL`).
+- [x] Review reports (`review_report.rs`): a finished review is saved as `<date>-<service>-v<version>-<id>.md` with
+      front matter (project version and its source, model version, evaluation ID, time). Destination: `save_to`, else
+      the `meridian/` folder of the git repository around `repo_path`, else the `meridian/` folder of an
+      architecture, design, or admin folder when the work spans several repositories, else a scratch folder with
+      `meridian_move_review`. Never overwrites. `scripts/meridian-mcp-local.sh` runs the client against the local backend.
 
 ## Backend contract (blocks real use)
 
@@ -22,8 +27,8 @@ The v1 contract is `meridian-docs/architecture/mcp-api.md` (proposed). The backe
       ID, idempotency key, `If-Match`), and passphrase error codes.
 - [x] Add `meridian_projects` (list and create); kept as a fifth tool rather than folded into `meridian_next`.
 - [x] Add the `answers` field to `meridian_next` and the `If-Match` model version to writes.
-- [x] Poll `GET .../evaluations/{id}` for `202` evaluation results (the v1 backend answers synchronously, so
-      this path is not exercised yet).
+- [x] Poll `GET .../evaluations/{id}` for `202` evaluation results, up to 15 minutes, and say how to rejoin a
+      running review (the backend now answers `evaluate` with `202`).
 - [x] Run the client against the real backend (2026-11-16, local jar, real API-key auth, encrypted store):
       passphrase required/incorrect, observations, inline answers, submit, model read-back, and
       `REVIEW_FULL` all worked. Not yet run against the Docker stack.
@@ -32,6 +37,18 @@ The v1 contract is `meridian-docs/architecture/mcp-api.md` (proposed). The backe
 - [ ] Handle `PAYMENT_REQUIRED`, `RATE_LIMITED`, `CLIENT_UPGRADE_REQUIRED`, and `SERVICE_UNAVAILABLE`
       (honour `retryAfterSeconds`) as clear tool results.
 - [ ] Settle whether API keys can be scoped to one project.
+- [ ] Show a failed evaluation's `details` (`category`, `providerStatus`, `providerErrorType`, `providerReason`) as
+      readable tool output, not raw JSON.
+- [ ] Run the review save end to end through the new client against production (unit-tested; the session that ran the
+      production review used the older client and the report was written by hand).
+- [ ] Learn the workspace root from the MCP `roots` capability instead of the server's working directory when `repo_path`
+      is omitted.
+- [ ] Verify the 15 minute poll against the agent host's own tool timeout (Claude Code moves a call over 120 seconds
+      to the background and returns later).
+- [ ] Project version detection beyond `pom.xml`, `package.json`, `Cargo.toml`, and `pyproject.toml`: Gradle,
+      `.csproj`, Go, and a `git describe` fallback.
+- [ ] Decide whether a readiness-only result is saved as a report (it currently is).
+- [ ] Update the README tools table for `meridian_move_review` and the evaluate parameters (`save_to`, `repo_path`, `version`).
 
 ## Local scanning
 
