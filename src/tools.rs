@@ -154,7 +154,27 @@ pub struct EvaluateParams {
     pub project: String,
     /// Service to run, for example `review`, `feasibility`, `tech_evaluation`.
     pub service: String,
+    /// Directory to save a finished review's markdown report in. When omitted it is chosen for you: the
+    /// `meridian/` folder of the git repository around `repo_path`, or, when `repo_path` holds several
+    /// repositories, of its architecture, design, or admin folder. If neither exists it goes to a scratch
+    /// folder and the result says so; ask the user whether to move it with `meridian_move_review`.
+    pub save_to: Option<String>,
+    /// Repository root, used to read the project's version and to build the suggested location.
+    /// Defaults to the server's working directory.
+    pub repo_path: Option<String>,
+    /// The project's version at the time of the review, recorded in the report. Detected from
+    /// pom.xml, package.json, Cargo.toml, or pyproject.toml when omitted; pass it when the project
+    /// has none of those.
+    pub version: Option<String>,
     pub passphrase: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct MoveReviewParams {
+    /// The `savedTo` path of a review that was saved in the scratch folder.
+    pub from: String,
+    /// Directory to move the report into, as the user chose it, for example `<repo>/meridian`.
+    pub to: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -296,7 +316,12 @@ impl MeridianTools {
     }
 
     #[tool(description = "Run an entitled Meridian service (review, feasibility, and so on) \
-        against the project. Waits for the result.")]
+        against the project. Waits for the result. A finished review comes back as a markdown \
+        `report`, and is saved straight away: in `save_to` if given, otherwise in the `meridian/` \
+        folder of the git repository it belongs in (or of an architecture, design, or admin folder when \
+        the work spans several repositories), otherwise in a scratch folder (the result then says `scratch`, and \
+        you should ask the user whether to move it with `meridian_move_review`). The saved file records \
+        the project's version at the time of the review; `savedTo` says where it went.")]
     async fn meridian_evaluate(
         &self,
         p: Parameters<EvaluateParams>,
@@ -314,18 +339,42 @@ impl MeridianTools {
             if v.get("status").and_then(Value::as_str) == Some("RUNNING") {
                 if let Some(id) = v.get("evaluationId").and_then(Value::as_str) {
                     let poll = format!("/projects/{}/evaluations/{}", p.project, id);
-                    for _ in 0..60 {
+                    // A review is one long model call; wait up to fifteen minutes for it.
+                    for _ in 0..450 {
                         tokio::time::sleep(Duration::from_secs(2)).await;
                         match self.backend.call(Method::GET, &poll, None, held.as_deref(), false, None).await {
                             Reply::Ok(r) if r.get("status").and_then(Value::as_str) == Some("RUNNING") => {}
-                            other => return self.finish(other, held.is_some()),
+                            other => return self.finish(save_review(other, &p), held.is_some()),
                         }
                     }
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(v.to_string())]));
+                    let mut still = v.clone();
+                    still["note"] = json!(
+                        "Still running after fifteen minutes. Call meridian_evaluate again to rejoin this \
+                         evaluation; it will not start a second one."
+                    );
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(still.to_string())]));
                 }
             }
         }
-        self.finish(first, held.is_some())
+        self.finish(save_review(first, &p), held.is_some())
+    }
+
+    #[tool(description = "Move a review report that meridian_evaluate saved in the scratch folder \
+        into a directory the user chose, for example `<repo>/meridian`. Only a file in the scratch \
+        folder can be moved, and an existing file is never overwritten.")]
+    async fn meridian_move_review(
+        &self,
+        p: Parameters<MoveReviewParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = p.0;
+        match crate::review_report::move_from_scratch(
+            &crate::review_report::scratch_dir(),
+            &std::path::PathBuf::from(&p.from),
+            &std::path::PathBuf::from(&p.to),
+        ) {
+            Ok(moved) => self.finish(Reply::Ok(json!({ "movedTo": moved.display().to_string() })), false),
+            Err(e) => self.finish(Reply::Failed(format!("Could not move the report: {e}")), false),
+        }
     }
 
     #[tool(description = "Read the current Architecture Model, completeness map, open questions, \
@@ -360,5 +409,65 @@ impl ServerHandler for MeridianTools {
                  the model need the user's Architecture Passphrase; if a tool returns \
                  `passphrase_required`, ask the user for it and retry. Never invent a passphrase.",
             )
+    }
+}
+
+/// Saves a completed review's markdown report: where `save_to` says, else in the `meridian/` of the git
+/// repository (or architecture/design/admin folder) it belongs in, else in the scratch folder (then the
+/// agent is told to offer moving it). Adds `savedTo`, `projectVersion`,
+/// and `versionSource`, or `saveError`. Any other reply passes through.
+fn save_review(reply: Reply, p: &EvaluateParams) -> Reply {
+    let Reply::Ok(mut v) = reply else { return reply };
+    let complete = v.get("status").and_then(Value::as_str) == Some("COMPLETE");
+    if !complete || v.get("report").and_then(Value::as_str).is_none() {
+        return Reply::Ok(v);
+    }
+    let root = match repo_root(p.repo_path.as_deref()) {
+        Ok(root) => root,
+        Err(e) => {
+            v["saveError"] = json!(e);
+            return Reply::Ok(v);
+        }
+    };
+    // Where it goes: the user's `save_to`, else the repository's (or architecture folder's) `meridian/`,
+    // else a scratch folder that the agent offers to move out of.
+    let (dir, scratch) = match &p.save_to {
+        Some(dir) => (std::path::PathBuf::from(dir), false),
+        None => match crate::review_report::resolve_destination(&root) {
+            Some(found) => {
+                v["destinationReason"] = json!(found.reason);
+                (found.dir, false)
+            }
+            None => (crate::review_report::scratch_dir(), true),
+        },
+    };
+    apply_save(&mut v, &dir, &root, p.version.as_deref(), &p.project);
+    if scratch && v.get("savedTo").is_some() {
+        v["scratch"] = json!(true);
+        v["suggestedDirectory"] = json!(root.join("meridian").display().to_string());
+        v["instruction"] = json!(
+            "The report is saved in a scratch folder (`savedTo`). Ask the user whether to move it into the \
+             repository, suggesting `suggestedDirectory`, and if so call meridian_move_review with `from` set \
+             to `savedTo` and `to` set to their chosen directory."
+        );
+    }
+    Reply::Ok(v)
+}
+
+fn repo_root(repo_path: Option<&str>) -> Result<std::path::PathBuf, String> {
+    match repo_path {
+        Some(path) => Ok(std::path::PathBuf::from(path)),
+        None => std::env::current_dir().map_err(|e| format!("no repository path and no working directory: {e}")),
+    }
+}
+
+fn apply_save(v: &mut Value, dir: &std::path::Path, root: &std::path::Path, version: Option<&str>, project: &str) {
+    match crate::review_report::save(dir, root, version, project, v) {
+        Ok(saved) => {
+            v["savedTo"] = json!(saved.path.display().to_string());
+            v["projectVersion"] = json!(saved.version);
+            v["versionSource"] = json!(saved.version_source);
+        }
+        Err(e) => v["saveError"] = json!(e),
     }
 }

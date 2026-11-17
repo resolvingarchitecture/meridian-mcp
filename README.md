@@ -48,6 +48,28 @@ agent --stdio MCP--> meridian-mcp --HTTPS--> meridian-backend
 | `meridian_evaluate` | Run an entitled service (review, feasibility, and so on)              | Per service |
 | `meridian_model`    | Read the current model, completeness map, findings, and decisions     | Free        |
 
+### Review reports
+
+A finished review comes back as a markdown `report`, and `meridian_evaluate` saves it straight away, so
+nobody has to type a path. `save_to` overrides everything. Otherwise, from `repo_path` (default: the
+server's working directory):
+
+- inside a git repository, it goes in that repository's `meridian/` folder;
+- if `repo_path` is not a repository but holds several, it goes in the `meridian/` folder of its
+  architecture, design, or admin folder (a folder whose name contains `architecture`, then `design`, then `admin`);
+- otherwise it goes to a scratch folder (`$MERIDIAN_REVIEW_SCRATCH`, else `~/.cache/meridian/reviews`),
+  the result says `scratch: true`, and the agent offers to move it with `meridian_move_review` (only files
+  in the scratch folder can be moved, and an existing file is never overwritten).
+
+`destinationReason` in the result says why a folder was chosen.
+
+The file is named `<date>-<service>-v<version>-<id>.md`, so reports for different versions sit side by
+side, and starts with front matter that records the project's version at the time of the review
+(`project_version`, and `version_source`), the Architecture Model version, the evaluation ID, and the time.
+The version is read from `pom.xml`, `package.json`, `Cargo.toml`, or `pyproject.toml` in `repo_path`
+(default: the server's working directory); pass `version` when the project has none of those. The result's
+`saveError` says why a report was not saved.
+
 Call `meridian_projects` first to get the `project` ID. Every other tool takes that `project` and an
 optional `passphrase`; `meridian_projects` needs a passphrase only to create.
 
