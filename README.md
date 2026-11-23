@@ -54,8 +54,8 @@ A finished review comes back as a markdown `report`, and `meridian_evaluate` sav
 nobody has to type a path. `save_to` overrides everything. Otherwise, from `repo_path` (default: the
 server's working directory):
 
-- inside a git repository, it goes in that repository's `meridian/` folder;
-- if `repo_path` is not a repository but holds several, it goes in the `meridian/` folder of its
+- inside a git repository, it goes in that repository's `reviews/` folder;
+- if `repo_path` is not a repository but holds several, it goes in the `reviews/` folder of its
   architecture, design, or admin folder (a folder whose name contains `architecture`, then `design`, then `admin`);
 - otherwise it goes to a scratch folder (`$MERIDIAN_REVIEW_SCRATCH`, else `~/.cache/meridian/reviews`),
   the result says `scratch: true`, and the agent offers to move it with `meridian_move_review` (only files

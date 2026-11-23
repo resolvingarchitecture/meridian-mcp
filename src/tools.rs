@@ -159,7 +159,7 @@ pub struct EvaluateParams {
     /// Service to run, for example `review`, `feasibility`, `tech_evaluation`.
     pub service: String,
     /// Directory to save a finished review's markdown report in. When omitted it is chosen for you: the
-    /// `meridian/` folder of the git repository around `repo_path`, or, when `repo_path` holds several
+    /// `reviews/` folder of the git repository around `repo_path`, or, when `repo_path` holds several
     /// repositories, of its architecture, design, or admin folder. If neither exists it goes to a scratch
     /// folder and the result says so; ask the user whether to move it with `meridian_move_review`.
     pub save_to: Option<String>,
@@ -321,7 +321,7 @@ impl MeridianTools {
 
     #[tool(description = "Run an entitled Meridian service (review, feasibility, and so on) \
         against the project. Waits for the result. A finished review comes back as a markdown \
-        `report`, and is saved straight away: in `save_to` if given, otherwise in the `meridian/` \
+        `report`, and is saved straight away: in `save_to` if given, otherwise in the `reviews/` \
         folder of the git repository it belongs in (or of an architecture, design, or admin folder when \
         the work spans several repositories), otherwise in a scratch folder (the result then says `scratch`, and \
         you should ask the user whether to move it with `meridian_move_review`). The saved file records \
@@ -416,7 +416,7 @@ impl ServerHandler for MeridianTools {
     }
 }
 
-/// Saves a completed review's markdown report: where `save_to` says, else in the `meridian/` of the git
+/// Saves a completed review's markdown report: where `save_to` says, else in the `reviews/` of the git
 /// repository (or architecture/design/admin folder) it belongs in, else in the scratch folder (then the
 /// agent is told to offer moving it). Adds `savedTo`, `projectVersion`,
 /// and `versionSource`, or `saveError`. Any other reply passes through.
@@ -433,7 +433,7 @@ fn save_review(reply: Reply, p: &EvaluateParams) -> Reply {
             return Reply::Ok(v);
         }
     };
-    // Where it goes: the user's `save_to`, else the repository's (or architecture folder's) `meridian/`,
+    // Where it goes: the user's `save_to`, else the repository's (or architecture folder's) `reviews/`,
     // else a scratch folder that the agent offers to move out of.
     let (dir, scratch) = match &p.save_to {
         Some(dir) => (std::path::PathBuf::from(dir), false),

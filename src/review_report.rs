@@ -3,7 +3,7 @@
 //! The backend returns the review as markdown (`report`). The connector runs next to the repository,
 //! so it is the part that can read the project's version and write the file. It picks the destination
 //! so the user need not type one: inside a git repository the report goes in that repository's
-//! `meridian/`; across several repositories it goes in the `meridian/` of an architecture, design, or
+//! `reviews/`; across several repositories it goes in the `reviews/` of an architecture, design, or
 //! admin folder. When neither applies it is saved in a scratch folder, so nothing is lost, and the
 //! agent offers to move it. Every report records the project version at the time of the review in its
 //! front matter and in its file name, so reports for different versions sit side by side.
@@ -98,7 +98,10 @@ pub struct Saved {
     pub version_source: String,
 }
 
-/// Where a report goes without being told: the `meridian/` folder it belongs in, and why.
+/// The folder a project's reviews are saved in: `<project>/reviews`, for example `seda-bus-java/reviews`.
+pub const REVIEWS_DIR: &str = "reviews";
+
+/// Where a report goes without being told: the `reviews/` folder it belongs in, and why.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Destination {
     pub dir: PathBuf,
@@ -108,9 +111,9 @@ pub struct Destination {
 /// Folder-name keywords, in priority order, that mark the place reports for several repositories belong.
 const HOME_FOLDERS: [&str; 3] = ["architecture", "design", "admin"];
 
-/// Picks the `meridian/` folder for work under `start`:
-/// - inside a git repository: that repository's `meridian/`;
-/// - otherwise, if `start` holds git repositories (the work spans several): the `meridian/` of the child
+/// Picks the `reviews/` folder for work under `start`:
+/// - inside a git repository: that repository's `reviews/`;
+/// - otherwise, if `start` holds git repositories (the work spans several): the `reviews/` of the child
 ///   folder whose name contains `architecture`, then `design`, then `admin` (ties by name);
 /// - otherwise nothing, and the caller uses the scratch folder.
 pub fn resolve_destination(start: &Path) -> Option<Destination> {
@@ -118,7 +121,7 @@ pub fn resolve_destination(start: &Path) -> Option<Destination> {
     for dir in start.ancestors() {
         if dir.join(".git").exists() {
             return Some(Destination {
-                dir: dir.join("meridian"),
+                dir: dir.join(REVIEWS_DIR),
                 reason: format!("inside the git repository {}", dir.display()),
             });
         }
@@ -145,7 +148,7 @@ pub fn resolve_destination(start: &Path) -> Option<Destination> {
         }
     }
     best.map(|(_, name, dir)| Destination {
-        dir: dir.join("meridian"),
+        dir: dir.join(REVIEWS_DIR),
         reason: format!("{} holds several repositories; reports go in its \"{name}\" folder", start.display()),
     })
 }
@@ -323,15 +326,15 @@ mod tests {
             "modelVersion": 6, "report": "# Review\n\nFindings."
         });
 
-        let saved = save(&dir.join("meridian"), &dir, None, "proj-1", &result).unwrap();
+        let saved = save(&dir.join(REVIEWS_DIR), &dir, None, "proj-1", &result).unwrap();
 
         assert_eq!(saved.version, "1.3.1");
-        assert!(saved.path.ends_with("meridian/2026-11-17T01-00-00Z-review_full-v1.3.1.md"), "{:?}", saved.path);
+        assert!(saved.path.ends_with("reviews/2026-11-17T01-00-00Z-review_full-v1.3.1.md"), "{:?}", saved.path);
         let text = fs::read_to_string(&saved.path).unwrap();
         assert!(text.starts_with("---\nservice: REVIEW_FULL\nproject_version: 1.3.1\nversion_source: pom.xml\n"));
         assert!(text.contains("architecture_model_version: 6"));
         assert!(text.ends_with("# Review\n\nFindings.\n"));
-        assert!(save(&dir.join("meridian"), &dir, None, "proj-1", &result).is_err(), "must not overwrite");
+        assert!(save(&dir.join(REVIEWS_DIR), &dir, None, "proj-1", &result).is_err(), "must not overwrite");
     }
 
     #[test]
@@ -370,30 +373,30 @@ mod tests {
         let result = json!({ "service": "REVIEW_FULL", "evaluationId": "abcdef12", "evaluatedAt": "2026-11-17", "report": "r" });
         let saved = save(&scratch, &dest, Some("1.0.0"), "p", &result).unwrap();
 
-        let moved = move_from_scratch(&scratch, &saved.path, &dest.join("meridian")).unwrap();
+        let moved = move_from_scratch(&scratch, &saved.path, &dest.join(REVIEWS_DIR)).unwrap();
 
-        assert!(moved.ends_with("meridian/2026-11-17-review_full-v1.0.0.md"), "{moved:?}");
+        assert!(moved.ends_with("reviews/2026-11-17-review_full-v1.0.0.md"), "{moved:?}");
         assert!(!saved.path.exists(), "the scratch copy is gone");
         assert!(fs::read_to_string(&moved).unwrap().contains("project_version: 1.0.0"));
 
         // A file outside scratch cannot be moved, and an existing destination is never overwritten.
         let other = dest.join("other.txt");
         fs::write(&other, "x").unwrap();
-        assert!(move_from_scratch(&scratch, &other, &dest.join("meridian")).unwrap_err().contains("not a saved review"));
+        assert!(move_from_scratch(&scratch, &other, &dest.join(REVIEWS_DIR)).unwrap_err().contains("not a saved review"));
         let again = save(&scratch, &dest, Some("1.0.0"), "p", &result).unwrap();
-        assert!(move_from_scratch(&scratch, &again.path, &dest.join("meridian")).is_err());
+        assert!(move_from_scratch(&scratch, &again.path, &dest.join(REVIEWS_DIR)).is_err());
         assert!(again.path.exists(), "a refused move leaves the scratch file alone");
     }
 
     #[test]
-    fn a_git_repository_gets_its_own_meridian_folder() {
+    fn a_git_repository_gets_its_own_reviews_folder() {
         let repo = temp("repo");
         fs::create_dir_all(repo.join(".git")).unwrap();
         fs::create_dir_all(repo.join("src/deep")).unwrap();
 
         let d = resolve_destination(&repo.join("src/deep")).unwrap();
 
-        assert_eq!(d.dir, fs::canonicalize(&repo).unwrap().join("meridian"));
+        assert_eq!(d.dir, fs::canonicalize(&repo).unwrap().join(REVIEWS_DIR));
         assert!(d.reason.contains("git repository"));
     }
 
@@ -407,11 +410,11 @@ mod tests {
         fs::create_dir_all(root.join("svc-b/.git")).unwrap();
 
         let d = resolve_destination(&root).unwrap();
-        assert_eq!(d.dir, fs::canonicalize(&root).unwrap().join("my-design-docs/meridian"), "design beats admin");
+        assert_eq!(d.dir, fs::canonicalize(&root).unwrap().join("my-design-docs/reviews"), "design beats admin");
 
         fs::create_dir_all(root.join("platform-architecture")).unwrap();
         let d = resolve_destination(&root).unwrap();
-        assert_eq!(d.dir, fs::canonicalize(&root).unwrap().join("platform-architecture/meridian"), "architecture wins");
+        assert_eq!(d.dir, fs::canonicalize(&root).unwrap().join("platform-architecture/reviews"), "architecture wins");
     }
 
     #[test]
@@ -428,7 +431,7 @@ mod tests {
         let dir = temp("bad");
         assert!(save(&dir, &dir, None, "p", &json!({"status": "NOT_READY"})).is_err());
         let result = json!({ "service": "S", "evaluationId": "i", "evaluatedAt": "2026-11-17", "report": "r" });
-        let saved = save(&dir.join("meridian"), &dir, Some("../../etc/x"), "p", &result).unwrap();
-        assert!(saved.path.starts_with(dir.canonicalize().unwrap().join("meridian")), "{:?}", saved.path);
+        let saved = save(&dir.join(REVIEWS_DIR), &dir, Some("../../etc/x"), "p", &result).unwrap();
+        assert!(saved.path.starts_with(dir.canonicalize().unwrap().join(REVIEWS_DIR)), "{:?}", saved.path);
     }
 }
