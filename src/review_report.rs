@@ -4,8 +4,8 @@
 //! so it is the part that can read the project's version and write the file. It picks the destination
 //! so the user need not type one: inside a git repository the report goes in that repository's
 //! `reviews/`; across several repositories it goes in the `reviews/` of an architecture, design, or
-//! admin folder. When neither applies it is saved in a scratch folder, so nothing is lost, and the
-//! agent offers to move it. Every report records the project version at the time of the review in its
+//! admin folder. When neither applies it goes in the `reviews/` folder of the path it was asked about, so a
+//! report is never left in a hidden place. Every report records the project version at the time of the review in its
 //! front matter and in its file name, so reports for different versions sit side by side.
 
 use serde_json::Value;
@@ -115,29 +115,29 @@ const HOME_FOLDERS: [&str; 3] = ["architecture", "design", "admin"];
 /// - inside a git repository: that repository's `reviews/`;
 /// - otherwise, if `start` holds git repositories (the work spans several): the `reviews/` of the child
 ///   folder whose name contains `architecture`, then `design`, then `admin` (ties by name);
-/// - otherwise nothing, and the caller uses the scratch folder.
-pub fn resolve_destination(start: &Path) -> Option<Destination> {
-    let start = fs::canonicalize(start).ok()?;
+/// - otherwise the `reviews/` folder of `start` itself.
+pub fn resolve_destination(start: &Path) -> Destination {
+    let start = fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
+    let own = |reason: String| Destination { dir: start.join(REVIEWS_DIR), reason };
     for dir in start.ancestors() {
         if dir.join(".git").exists() {
-            return Some(Destination {
+            return Destination {
                 dir: dir.join(REVIEWS_DIR),
                 reason: format!("inside the git repository {}", dir.display()),
-            });
+            };
         }
     }
-    let children: Vec<PathBuf> = fs::read_dir(&start)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .collect();
+    let children: Vec<PathBuf> = match fs::read_dir(&start) {
+        Ok(entries) => entries.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.is_dir()).collect(),
+        Err(_) => Vec::new(),
+    };
     if !children.iter().any(|c| c.join(".git").exists()) {
-        return None;
+        return own(format!("{} is not in a git repository; reports go in its own reviews folder", start.display()));
     }
     let mut best: Option<(usize, String, PathBuf)> = None;
     for child in children {
-        let name = child.file_name()?.to_string_lossy().to_lowercase();
+        let Some(file_name) = child.file_name() else { continue };
+        let name = file_name.to_string_lossy().to_lowercase();
         if name.starts_with('.') {
             continue;
         }
@@ -147,51 +147,13 @@ pub fn resolve_destination(start: &Path) -> Option<Destination> {
             }
         }
     }
-    best.map(|(_, name, dir)| Destination {
-        dir: dir.join(REVIEWS_DIR),
-        reason: format!("{} holds several repositories; reports go in its \"{name}\" folder", start.display()),
-    })
-}
-
-/// The scratch folder reports are saved in first: `MERIDIAN_REVIEW_SCRATCH`, else
-/// `$XDG_CACHE_HOME/meridian/reviews`, else `~/.cache/meridian/reviews`, else the system temp folder.
-pub fn scratch_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("MERIDIAN_REVIEW_SCRATCH").filter(|d| !d.is_empty()) {
-        return PathBuf::from(dir);
+    match best {
+        Some((_, name, dir)) => Destination {
+            dir: dir.join(REVIEWS_DIR),
+            reason: format!("{} holds several repositories; reports go in its \"{name}\" folder", start.display()),
+        },
+        None => own(format!("{} holds several repositories and no architecture, design or admin folder; reports go in its own reviews folder", start.display())),
     }
-    if let Some(cache) = std::env::var_os("XDG_CACHE_HOME").filter(|d| !d.is_empty()) {
-        return PathBuf::from(cache).join("meridian").join("reviews");
-    }
-    if let Some(home) = std::env::var_os("HOME").filter(|d| !d.is_empty()) {
-        return PathBuf::from(home).join(".cache").join("meridian").join("reviews");
-    }
-    std::env::temp_dir().join("meridian-reviews")
-}
-
-/// Moves a report out of `scratch` into `to_dir` and returns its new path. Only a file inside `scratch`
-/// can be moved (this is not a general file mover), and an existing file is never overwritten.
-pub fn move_from_scratch(scratch: &Path, from: &Path, to_dir: &Path) -> Result<PathBuf, String> {
-    let scratch = fs::canonicalize(scratch).map_err(|e| format!("scratch folder {}: {e}", scratch.display()))?;
-    let from = fs::canonicalize(from).map_err(|e| format!("{}: {e}", from.display()))?;
-    if !from.starts_with(&scratch) || !from.is_file() {
-        return Err(format!("{} is not a saved review in the scratch folder {}", from.display(), scratch.display()));
-    }
-    if to_dir.exists() && !to_dir.is_dir() {
-        return Err(format!("{} is not a directory", to_dir.display()));
-    }
-    fs::create_dir_all(to_dir).map_err(|e| format!("create {}: {e}", to_dir.display()))?;
-    let to = fs::canonicalize(to_dir)
-        .map_err(|e| format!("{}: {e}", to_dir.display()))?
-        .join(from.file_name().ok_or("the file has no name")?);
-    let content = fs::read(&from).map_err(|e| format!("read {}: {e}", from.display()))?;
-    let mut out = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&to)
-        .map_err(|e| format!("write {}: {e}", to.display()))?;
-    out.write_all(&content).map_err(|e| format!("write {}: {e}", to.display()))?;
-    fs::remove_file(&from).map_err(|e| format!("copied to {} but could not remove {}: {e}", to.display(), from.display()))?;
-    Ok(to)
 }
 
 /// What a report would be called and which version it records, before anything is written.
@@ -367,34 +329,12 @@ mod tests {
     }
 
     #[test]
-    fn a_saved_report_moves_out_of_scratch_but_nothing_else_does() {
-        let scratch = temp("scratch");
-        let dest = temp("dest");
-        let result = json!({ "service": "REVIEW_FULL", "evaluationId": "abcdef12", "evaluatedAt": "2026-11-17", "report": "r" });
-        let saved = save(&scratch, &dest, Some("1.0.0"), "p", &result).unwrap();
-
-        let moved = move_from_scratch(&scratch, &saved.path, &dest.join(REVIEWS_DIR)).unwrap();
-
-        assert!(moved.ends_with("reviews/2026-11-17-review_full-v1.0.0.md"), "{moved:?}");
-        assert!(!saved.path.exists(), "the scratch copy is gone");
-        assert!(fs::read_to_string(&moved).unwrap().contains("project_version: 1.0.0"));
-
-        // A file outside scratch cannot be moved, and an existing destination is never overwritten.
-        let other = dest.join("other.txt");
-        fs::write(&other, "x").unwrap();
-        assert!(move_from_scratch(&scratch, &other, &dest.join(REVIEWS_DIR)).unwrap_err().contains("not a saved review"));
-        let again = save(&scratch, &dest, Some("1.0.0"), "p", &result).unwrap();
-        assert!(move_from_scratch(&scratch, &again.path, &dest.join(REVIEWS_DIR)).is_err());
-        assert!(again.path.exists(), "a refused move leaves the scratch file alone");
-    }
-
-    #[test]
     fn a_git_repository_gets_its_own_reviews_folder() {
         let repo = temp("repo");
         fs::create_dir_all(repo.join(".git")).unwrap();
         fs::create_dir_all(repo.join("src/deep")).unwrap();
 
-        let d = resolve_destination(&repo.join("src/deep")).unwrap();
+        let d = resolve_destination(&repo.join("src/deep"));
 
         assert_eq!(d.dir, fs::canonicalize(&repo).unwrap().join(REVIEWS_DIR));
         assert!(d.reason.contains("git repository"));
@@ -409,21 +349,25 @@ mod tests {
         fs::create_dir_all(root.join("svc-a/.git")).unwrap();
         fs::create_dir_all(root.join("svc-b/.git")).unwrap();
 
-        let d = resolve_destination(&root).unwrap();
+        let d = resolve_destination(&root);
         assert_eq!(d.dir, fs::canonicalize(&root).unwrap().join("my-design-docs/reviews"), "design beats admin");
 
         fs::create_dir_all(root.join("platform-architecture")).unwrap();
-        let d = resolve_destination(&root).unwrap();
+        let d = resolve_destination(&root);
         assert_eq!(d.dir, fs::canonicalize(&root).unwrap().join("platform-architecture/reviews"), "architecture wins");
     }
 
     #[test]
-    fn nothing_matches_means_no_destination() {
+    fn nothing_matching_means_the_paths_own_reviews_folder() {
         let root = temp("none");
         fs::create_dir_all(root.join("svc/.git")).unwrap();
-        assert_eq!(resolve_destination(&root), None, "repositories but no architecture/design/admin folder");
+        let several = resolve_destination(&root);
+        assert_eq!(several.dir, fs::canonicalize(&root).unwrap().join(REVIEWS_DIR), "repositories but no architecture/design/admin folder");
+        assert!(several.reason.contains("several repositories"));
         let empty = temp("empty");
-        assert_eq!(resolve_destination(&empty), None, "no repositories at all");
+        let alone = resolve_destination(&empty);
+        assert_eq!(alone.dir, fs::canonicalize(&empty).unwrap().join(REVIEWS_DIR), "no repositories at all");
+        assert!(alone.reason.contains("not in a git repository"));
     }
 
     #[test]

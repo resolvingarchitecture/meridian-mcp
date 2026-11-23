@@ -57,9 +57,7 @@ server's working directory):
 - inside a git repository, it goes in that repository's `reviews/` folder;
 - if `repo_path` is not a repository but holds several, it goes in the `reviews/` folder of its
   architecture, design, or admin folder (a folder whose name contains `architecture`, then `design`, then `admin`);
-- otherwise it goes to a scratch folder (`$MERIDIAN_REVIEW_SCRATCH`, else `~/.cache/meridian/reviews`),
-  the result says `scratch: true`, and the agent offers to move it with `meridian_move_review` (only files
-  in the scratch folder can be moved, and an existing file is never overwritten).
+- otherwise it goes in the `reviews/` folder of `repo_path` (or of the server's working directory).
 
 `destinationReason` in the result says why a folder was chosen.
 

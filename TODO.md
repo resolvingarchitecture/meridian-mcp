@@ -12,8 +12,8 @@ Status key: `[x]` done, `[ ]` open. Decisions are in `ADR-AppArch-25`.
 - [x] Review reports (`review_report.rs`): a finished review is saved as `<date>-<service>-v<version>-<id>.md` with
       front matter (project version and its source, model version, evaluation ID, time). Destination: `save_to`, else
       the `reviews/` folder of the git repository around `repo_path`, else the `reviews/` folder of an
-      architecture, design, or admin folder when the work spans several repositories, else a scratch folder with
-      `meridian_move_review`. Never overwrites. `scripts/meridian-mcp-local.sh` runs the client against the local backend.
+      architecture, design, or admin folder when the work spans several repositories, else the `reviews/` folder of `repo_path`.
+      There is no scratch folder and no move tool (removed in 0.2.0). Never overwrites. `scripts/meridian-mcp-local.sh` runs the client against the local backend.
 
 ## Backend contract (blocks real use)
 
@@ -48,7 +48,7 @@ The v1 contract is `meridian-docs/architecture/mcp-api.md` (proposed). The backe
 - [ ] Project version detection beyond `pom.xml`, `package.json`, `Cargo.toml`, and `pyproject.toml`: Gradle,
       `.csproj`, Go, and a `git describe` fallback.
 - [ ] Decide whether a readiness-only result is saved as a report (it currently is).
-- [ ] Update the README tools table for `meridian_move_review` and the evaluate parameters (`save_to`, `repo_path`, `version`).
+- [ ] Update the README tools table for the evaluate parameters (`save_to`, `repo_path`, `version`).
 
 ## Local scanning
 
