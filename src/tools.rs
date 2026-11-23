@@ -277,6 +277,14 @@ impl MeridianTools {
         }
     }
 
+    #[tool(description = "Show the signed-in account: the user's name, how many credits they have and what one run of \
+        each service costs (and whether they can afford it), how many reviews they have run, and how many projects \
+        they have. Takes no arguments and needs no passphrase. Call it before `meridian_evaluate` to check the user \
+        has enough credits.")]
+    async fn meridian_account(&self) -> Result<CallToolResult, McpError> {
+        self.forward(Method::GET, "/account".into(), None, None, false, None).await
+    }
+
     #[tool(description = "Submit observations (and answers to earlier questions) about the project \
         and get back the current phase, the gaps in the architecture, and the next questions. Every \
         question carries an `answerExample` and an `answerFormat`: answer in that shape. Call \

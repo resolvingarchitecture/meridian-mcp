@@ -40,13 +40,14 @@ agent --stdio MCP--> meridian-mcp --HTTPS--> meridian-backend
 
 ## Tools
 
-| Tool                | Purpose                                                               | Entitlement |
-|---------------------|-----------------------------------------------------------------------|-------------|
-| `meridian_projects` | List your projects, or create one (the user chooses its passphrase)   | Free        |
-| `meridian_next`     | Submit observations; get phase, gaps, inconsistencies, next questions | Free        |
-| `meridian_submit`   | Submit facts or answers with source and confidence                    | Free        |
-| `meridian_evaluate` | Run an entitled service (review, feasibility, and so on)              | Per service |
-| `meridian_model`    | Read the current model, completeness map, findings, and decisions     | Free        |
+| Tool                | Purpose                                                                | Entitlement |
+|---------------------|------------------------------------------------------------------------|-------------|
+| `meridian_projects` | List your projects, or create one (the user chooses its passphrase)    | Free        |
+| `meridian_next`     | Submit observations; get phase, gaps, inconsistencies, next questions  | Free        |
+| `meridian_submit`   | Submit facts or answers with source and confidence                     | Free        |
+| `meridian_evaluate` | Run an entitled service (review, feasibility, and so on)               | Per service |
+| `meridian_model`    | Read the current model, completeness map, findings, and decisions      | Free        |
+| `meridian_account`  | Show your credits, what a run costs, your usage and your project count | Free        |
 
 ### Review reports
 

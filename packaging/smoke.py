@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 EXPECTED_TOOLS = {
-    "meridian_projects", "meridian_next", "meridian_submit", "meridian_model", "meridian_evaluate",
+    "meridian_projects", "meridian_next", "meridian_submit", "meridian_model", "meridian_evaluate", "meridian_account",
 }
 
 
