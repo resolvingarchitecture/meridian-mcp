@@ -169,6 +169,10 @@ pub struct EvaluateParams {
     /// pom.xml, package.json, Cargo.toml, or pyproject.toml when omitted; pass it when the project
     /// has none of those.
     pub version: Option<String>,
+    /// When true, return what the review would cost in credits without running it or spending anything. A review is
+    /// priced from the size of the project's model and the evidence submitted, so ask before running one and tell the
+    /// user the price when it is more than they expect.
+    pub quote_only: Option<bool>,
     pub passphrase: Option<String>,
 }
 
@@ -323,7 +327,9 @@ impl MeridianTools {
         `report`, and is saved straight away: in `save_to` if given, otherwise in the `reviews/` \
         folder of the git repository it belongs in (or of an architecture, design, or admin folder when \
         the work spans several repositories), otherwise in the `reviews/` folder of `repo_path`. The saved \
-        file records the project's version at the time of the review; `savedTo` says where it went.")]
+        file records the project's version at the time of the review; `savedTo` says where it went. A review is priced from the \
+        size of the project, so call it first with `quote_only` to see the price and whether the user can afford \
+        it; credits are charged only if the review completes.")]
     async fn meridian_evaluate(
         &self,
         p: Parameters<EvaluateParams>,
@@ -331,7 +337,11 @@ impl MeridianTools {
         let p = p.0;
         let held = self.session.resolve(p.passphrase.clone());
         let path = format!("/projects/{}/evaluate", p.project);
-        let body = json!({ "service": p.service });
+        let body = if p.quote_only.unwrap_or(false) {
+            json!({ "service": p.service, "options": { "quoteOnly": true } })
+        } else {
+            json!({ "service": p.service })
+        };
         let first = self
             .backend
             .call(Method::POST, &path, Some(body), held.as_deref(), true, None)
