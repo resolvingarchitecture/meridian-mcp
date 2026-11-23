@@ -27,10 +27,10 @@ agent --stdio MCP--> meridian-mcp --HTTPS--> meridian-backend
   model, the gap rules, entitlements, and payments.
 - **Deterministic gap detection.** The backend's rules decide what is missing and what to ask; an
   LLM may only phrase questions. Same observations in, same questions out.
-- **The connector scans locally and sends what the backend needs.** Meridian needs the project's
-  source to review and evaluate it. Today the connector sends structured observations (paths, counts,
-  summaries) and the text of architecture documents; whether it should also send source files is an
-  open design question.
+- **The connector scans locally and sends what the backend needs.** It sends structured observations
+  (paths, counts, summaries), the text of architecture documents, and, as `SOURCE` observations, the
+  source, test and build files a review needs as evidence of what is built. Source text is stored only in
+  the project's Implementation Model, encrypted under the Architecture Passphrase, and is never logged.
 - **Direct entry.** Facts submitted through the tools enter the model immediately, with provenance.
   There is no approval step.
 - **The agent supplies the passphrase.** Tools that touch the model accept the Architecture

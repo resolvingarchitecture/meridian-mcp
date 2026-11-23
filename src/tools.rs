@@ -35,6 +35,10 @@ pub enum ObservationKind {
     DataStore,
     Document,
     Diagram,
+    /// A source, test, configuration or build file sent as evidence of what is built, so a review can
+    /// compare the code with the design. Give its `path` and its `content`. It is stored encrypted under
+    /// the project passphrase; sending the same path again replaces the earlier copy.
+    Source,
 }
 
 /// A structured finding about the project, found by looking at it locally.
@@ -60,8 +64,8 @@ pub struct Observation {
     /// A hash of the underlying content, so unchanged findings can be recognized.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
-    /// For `DOCUMENT` and `DIAGRAM` only: the text of the architecture document (an ADR, a design doc,
-    /// diagram source), up to 256 KiB.
+    /// For `DOCUMENT`, `DIAGRAM` and `SOURCE`: the text of the file (an ADR, a design doc, diagram source,
+    /// or a source file sent as evidence), up to 256 KiB.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
 }
@@ -469,5 +473,22 @@ fn apply_save(v: &mut Value, dir: &std::path::Path, root: &std::path::Path, vers
             v["versionSource"] = json!(saved.version_source);
         }
         Err(e) => v["saveError"] = json!(e),
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+
+    #[test]
+    fn a_source_observation_serializes_with_its_path_and_content() {
+        let o: Observation = serde_json::from_value(serde_json::json!({
+            "kind": "SOURCE", "path": "src/Bus.java", "content": "class Bus {}"
+        }))
+        .unwrap();
+        let v = serde_json::to_value(&o).unwrap();
+        assert_eq!(v["kind"], "SOURCE");
+        assert_eq!(v["path"], "src/Bus.java");
+        assert_eq!(v["content"], "class Bus {}");
     }
 }
