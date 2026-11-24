@@ -12,7 +12,7 @@ use crate::session::Session;
 #[derive(Deserialize, JsonSchema)]
 pub struct SetupParams {
     /// What to do. With no account yet and no email: `signup_with_bitcoin`, then `signup_status`. With an email: 
-    /// `create_account`, then `request_api_key`. With an account: `buy_credits`, then `purchase_status`.
+    /// `create_account`, then `request_api_key`. `request_api_key` with no login details asks for the pay-first account's key: the key once paid, 402 until then. With an account: `buy_credits`, then `purchase_status`.
     pub action: String,
     /// `create_account`, `request_api_key`: the account's username (or its email, if no username was chosen).
     pub username: Option<String>,
@@ -30,8 +30,9 @@ pub struct SetupParams {
     /// `request_api_key`: true to revoke the account's current key and issue a new one. Anything using the old key
     /// stops working, so only set it when the user has said so.
     pub replace_existing: Option<bool>,
-    /// `signup_with_bitcoin`, `buy_credits`: how many credits to buy (1 to 10000). A new account's first purchase
-    /// must be at least the minimum the server states (5 USD at 0.50 USD a credit is 10 credits).
+    /// `signup_with_bitcoin`: optional. The first payment must be worth at least 5 USD, which is what is invoiced when
+    /// this is left out. It is a minimum, not a price: a Bitcoin payment of more buys more credits (at the credit rate,
+    /// rounded down to whole credits). `buy_credits`: how many credits to buy (1 to 10000).
     pub credits: Option<u32>,
     /// `purchase_status`: the `purchaseId` that `buy_credits` returned.
     pub purchase: Option<String>,
@@ -49,7 +50,7 @@ pub async fn run(backend: &Backend, session: &Session, p: SetupParams) -> Outcom
         "signup_with_bitcoin" => signup_with_bitcoin(backend, session, p).await,
         "signup_status" => signup_status(backend, session, p).await,
         "create_account" => create_account(backend, p).await,
-        "request_api_key" => request_api_key(backend, p).await,
+        "request_api_key" => request_api_key(backend, session, p).await,
         "buy_credits" => buy_credits(backend, p).await,
         "purchase_status" => purchase_status(backend, p).await,
         other => Err(format!(
@@ -71,7 +72,11 @@ fn failure(what: &str, r: &Raw) -> String {
     let v = r.json();
     let message = v.get("message").and_then(Value::as_str).unwrap_or("request failed");
     let code = v.get("code").and_then(Value::as_str).unwrap_or("");
-    format!("{what}: {} {code} {message}", r.status).replace("  ", " ")
+    let mut text = format!("{what}: {} {code} {message}", r.status).replace("  ", " ");
+    if let Some(details) = v.get("details").filter(|d| d.as_object().is_some_and(|o| !o.is_empty())) {
+        text.push_str(&format!(" details: {details}"));
+    }
+    text
 }
 
 async fn create_account(backend: &Backend, p: SetupParams) -> Outcome {
@@ -101,7 +106,11 @@ async fn create_account(backend: &Backend, p: SetupParams) -> Outcome {
     Err(msg)
 }
 
-async fn request_api_key(backend: &Backend, p: SetupParams) -> Outcome {
+async fn request_api_key(backend: &Backend, session: &Session, p: SetupParams) -> Outcome {
+    let has_login = [&p.username, &p.email, &p.password].iter().any(|v| v.as_deref().is_some_and(|s| !s.trim().is_empty()));
+    if !has_login && (session.signup().is_some() || p.signup.is_some()) {
+        return signup_api_key(backend, session, &p).await;
+    }
     let password = required(&p.password, "password")?;
     let login = match (p.username.as_deref().map(str::trim).filter(|u| !u.is_empty()), p.email.as_deref().map(str::trim).filter(|u| !u.is_empty())) {
         (Some(u), _) => json!({ "username": u, "password": password }),
@@ -180,8 +189,11 @@ fn reply_message(reply: Reply) -> String {
 
 /// Pay-first: no email, password or captcha. The Bitcoin payment is what proves the sign-up is real.
 async fn signup_with_bitcoin(backend: &Backend, session: &Session, p: SetupParams) -> Outcome {
-    let credits = p.credits.ok_or("`credits` is required for this action. Ask the user how many to buy.")?;
-    let r = backend.raw(Method::POST, "/mcp/v1/signup", Some(json!({ "credits": credits })), None, &[]).await?;
+    let body = match p.credits {
+        Some(credits) => json!({ "credits": credits }),
+        None => json!({}),
+    };
+    let r = backend.raw(Method::POST, "/mcp/v1/signup", Some(body), None, &[]).await?;
     if !r.ok() {
         return Err(failure("Sign-up was not started", &r));
     }
@@ -195,7 +207,9 @@ async fn signup_with_bitcoin(backend: &Backend, session: &Session, p: SetupParam
     session.set_signup(id, secret);
     v["next"] = json!(
         "Show the user the address, the amount in sats (or the bitcoinUri) and when it expires. They pay from their own \
-         wallet; this tool cannot send Bitcoin. The account does not exist for use until the payment confirms. Keep the \
+         wallet; this tool cannot send Bitcoin. The amount is the minimum, not a fixed price: if they send more, they \
+         get more credits (usdPerCredit each, rounded down), so ask whether they want to send more. Sending less than \
+         the minimum buys nothing. The account does not exist for use until the payment confirms. Keep the \
          claimSecret: it is the only way back into this sign-up, so tell the user to store it safely if this session may \
          end. Then call `meridian_setup` with action `signup_status` until it reports the API key."
     );
@@ -204,14 +218,7 @@ async fn signup_with_bitcoin(backend: &Backend, session: &Session, p: SetupParam
 
 /// Checks a pay-first sign-up; once paid, collects the API key and starts using it.
 async fn signup_status(backend: &Backend, session: &Session, p: SetupParams) -> Outcome {
-    let held = session.signup();
-    let id = p.signup.clone().or(held.as_ref().map(|h| h.0.clone()))
-        .ok_or("No sign-up in progress. Call `signup_with_bitcoin` first, or pass `signup` and `claim_secret`.")?;
-    let secret = p.claim_secret.clone().or(held.map(|h| h.1))
-        .ok_or("`claim_secret` is required: it was returned by `signup_with_bitcoin`.")?;
-    if uuid::Uuid::parse_str(&id).is_err() {
-        return Err("`signup` must be the signupId that `signup_with_bitcoin` returned.".into());
-    }
+    let (id, secret) = signup_credentials(session, &p)?;
     let headers = [("X-Claim-Secret", secret.as_str())];
     let r = backend.raw(Method::GET, &format!("/mcp/v1/signup/{id}"), None, None, &headers).await?;
     if !r.ok() {
@@ -219,19 +226,12 @@ async fn signup_status(backend: &Backend, session: &Session, p: SetupParams) -> 
     }
     let mut status = r.json();
     if status.get("status").and_then(Value::as_str) != Some("PAID") {
-        status["next"] = json!("Not paid yet. Wait for the user to pay and for the network to confirm, then check again. \
-            If the payment request has expired, start a new sign-up.");
+        status["next"] = json!("Not paid yet. If `payment.status` is PENDING or RECEIVED the payment has been seen and is \
+            waiting for confirmations; otherwise wait for the user to pay. Check again, or call `request_api_key`, \
+            which answers 402 until the payment is confirmed. If the payment request has expired, start a new sign-up.");
         return Ok(status);
     }
-    let k = backend.raw(Method::POST, &format!("/mcp/v1/signup/{id}/api-key"), None, None, &headers).await?;
-    if !k.ok() {
-        return Err(failure("Paid, but the API key was not issued", &k));
-    }
-    let Some(key) = k.json().get("apiKey").and_then(Value::as_str).map(str::to_string) else {
-        return Err("Meridian returned no API key.".into());
-    };
-    backend.set_api_key(key.clone());
-    session.clear_signup();
+    let key = fetch_signup_key(backend, session, &id, &secret).await?;
     Ok(json!({
         "status": "PAID",
         "credits": status.get("credits"),
@@ -240,5 +240,49 @@ async fn signup_status(backend: &Backend, session: &Session, p: SetupParams) -> 
         "next": "Tell the user to keep the key: it is not saved anywhere, and to use it in future sessions they set \
                  MERIDIAN_API_KEY in this server's MCP configuration. This account has no email or password yet; to \
                  sign in to the Meridian web app they open its 'Claim your account' page and enter the key."
+    }))
+}
+
+/// The sign-up's ID and claim secret: from the call, else the one this session started.
+fn signup_credentials(session: &Session, p: &SetupParams) -> Result<(String, String), String> {
+    let held = session.signup();
+    let id = p.signup.clone().or(held.as_ref().map(|h| h.0.clone()))
+        .ok_or("No sign-up in progress. Call `signup_with_bitcoin` first, or pass `signup` and `claim_secret`.")?;
+    let secret = p.claim_secret.clone().or(held.map(|h| h.1))
+        .ok_or("`claim_secret` is required: it was returned by `signup_with_bitcoin`.")?;
+    if uuid::Uuid::parse_str(&id).is_err() {
+        return Err("`signup` must be the signupId that `signup_with_bitcoin` returned.".into());
+    }
+    Ok((id, secret))
+}
+
+/// Asks for the pay-first account's API key. Paid: the key, now in use. Not paid: an error carrying `402
+/// PAYMENT_REQUIRED` and how far the payment has got (for example `PENDING` with its transaction).
+async fn fetch_signup_key(backend: &Backend, session: &Session, id: &str, secret: &str) -> Result<String, String> {
+    let headers = [("X-Claim-Secret", secret)];
+    let k = backend.raw(Method::POST, &format!("/mcp/v1/signup/{id}/api-key"), None, None, &headers).await?;
+    if k.status == 402 {
+        return Err(failure("Payment required", &k));
+    }
+    if !k.ok() {
+        return Err(failure("API key was not issued", &k));
+    }
+    let Some(key) = k.json().get("apiKey").and_then(Value::as_str).map(str::to_string) else {
+        return Err("Meridian returned no API key.".into());
+    };
+    backend.set_api_key(key.clone());
+    session.clear_signup();
+    Ok(key)
+}
+
+async fn signup_api_key(backend: &Backend, session: &Session, p: &SetupParams) -> Outcome {
+    let (id, secret) = signup_credentials(session, p)?;
+    let key = fetch_signup_key(backend, session, &id, &secret).await?;
+    Ok(json!({
+        "apiKey": key,
+        "inUse": "This server is now using the key; the other Meridian tools work for the rest of this session.",
+        "next": "Tell the user to keep the key: it is not saved anywhere, and to use it in future sessions they set \
+                 MERIDIAN_API_KEY in this server's MCP configuration. To sign in to the Meridian web app they open its \
+                 'Claim your account' page and enter the key."
     }))
 }
