@@ -19,6 +19,9 @@ use crate::session::Session;
 pub struct MeridianTools {
     backend: Backend,
     session: Session,
+    store: crate::store::Store,
+    /// Why the credential store could not be read at startup, shown by `meridian_setup` so it is not silent.
+    store_warning: Option<String>,
 }
 
 /// What kind of finding an observation is.
@@ -196,8 +199,24 @@ pub struct ProjectsParams {
 }
 
 impl MeridianTools {
-    pub fn new(backend: Backend) -> Self {
-        Self { backend, session: Session::default() }
+    /// Starts with whatever the credential store holds for this backend: its API key if there is no key in the
+    /// environment, else the claim secret of a pay-first sign-up still waiting for its payment.
+    pub fn new(backend: Backend, store: crate::store::Store) -> Self {
+        let session = Session::default();
+        let mut store_warning = None;
+        if !backend.has_api_key() {
+            match store.load() {
+                Ok(account) => {
+                    if let Some(key) = account.api_key {
+                        backend.set_api_key(key);
+                    } else if let Some(signup) = account.signup {
+                        session.set_signup(signup.id, signup.claim_secret);
+                    }
+                }
+                Err(e) => store_warning = Some(e),
+            }
+        }
+        Self { backend, session, store, store_warning }
     }
 
     async fn forward(
@@ -292,9 +311,18 @@ impl MeridianTools {
         confirmed). Ask the user to choose and supply the password; it is never stored. Needs no API key for the \
         first two actions.")]
     async fn meridian_setup(&self, p: Parameters<crate::setup::SetupParams>) -> Result<CallToolResult, McpError> {
-        let text = match crate::setup::run(&self.backend, &self.session, p.0).await {
-            Ok(v) => return Ok(CallToolResult::success(vec![ContentBlock::text(v.to_string())])),
-            Err(m) => m,
+        let outcome = crate::setup::run(&self.backend, &self.session, &self.store, p.0).await;
+        let text = match outcome {
+            Ok(mut v) => {
+                if let Some(w) = &self.store_warning {
+                    v["storageWarning"] = json!(w);
+                }
+                return Ok(CallToolResult::success(vec![ContentBlock::text(v.to_string())]));
+            }
+            Err(m) => match &self.store_warning {
+                Some(w) => format!("{m} (Credential store: {w})"),
+                None => m,
+            },
         };
         Ok(CallToolResult::error(vec![ContentBlock::text(text)]))
     }

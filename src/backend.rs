@@ -58,6 +58,10 @@ impl Backend {
         *self.api_key.lock().unwrap_or_else(|e| e.into_inner()) = Some(key);
     }
 
+    pub fn has_api_key(&self) -> bool {
+        self.api_key().is_some()
+    }
+
     fn api_key(&self) -> Option<String> {
         self.api_key.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }

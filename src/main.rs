@@ -7,6 +7,7 @@ mod backend;
 mod config;
 mod review_report;
 mod session;
+mod store;
 mod setup;
 mod tools;
 
@@ -36,8 +37,10 @@ async fn main() -> Result<()> {
 }
 
 async fn serve() -> Result<()> {
-    let backend = backend::Backend::new(config::Config::from_env()?)?;
-    let service = tools::MeridianTools::new(backend).serve(stdio()).await?;
+    let config = config::Config::from_env()?;
+    let store = store::Store::open(&config.api_url);
+    let backend = backend::Backend::new(config)?;
+    let service = tools::MeridianTools::new(backend, store).serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
 }

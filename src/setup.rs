@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::backend::{Backend, Raw, Reply};
 use crate::session::Session;
+use crate::store::{PendingSignup, Store};
 
 #[derive(Deserialize, JsonSchema)]
 pub struct SetupParams {
@@ -45,12 +46,12 @@ pub struct SetupParams {
 /// The result of a setup call: a JSON value for the agent, or an error message.
 pub type Outcome = Result<Value, String>;
 
-pub async fn run(backend: &Backend, session: &Session, p: SetupParams) -> Outcome {
+pub async fn run(backend: &Backend, session: &Session, store: &Store, p: SetupParams) -> Outcome {
     match p.action.to_ascii_lowercase().as_str() {
-        "signup_with_bitcoin" => signup_with_bitcoin(backend, session, p).await,
-        "signup_status" => signup_status(backend, session, p).await,
+        "signup_with_bitcoin" => signup_with_bitcoin(backend, session, store, p).await,
+        "signup_status" => signup_status(backend, session, store, p).await,
         "create_account" => create_account(backend, p).await,
-        "request_api_key" => request_api_key(backend, session, p).await,
+        "request_api_key" => request_api_key(backend, session, store, p).await,
         "buy_credits" => buy_credits(backend, p).await,
         "purchase_status" => purchase_status(backend, p).await,
         other => Err(format!(
@@ -106,10 +107,10 @@ async fn create_account(backend: &Backend, p: SetupParams) -> Outcome {
     Err(msg)
 }
 
-async fn request_api_key(backend: &Backend, session: &Session, p: SetupParams) -> Outcome {
+async fn request_api_key(backend: &Backend, session: &Session, store: &Store, p: SetupParams) -> Outcome {
     let has_login = [&p.username, &p.email, &p.password].iter().any(|v| v.as_deref().is_some_and(|s| !s.trim().is_empty()));
     if !has_login && (session.signup().is_some() || p.signup.is_some()) {
-        return signup_api_key(backend, session, &p).await;
+        return signup_api_key(backend, session, store, &p).await;
     }
     let password = required(&p.password, "password")?;
     let login = match (p.username.as_deref().map(str::trim).filter(|u| !u.is_empty()), p.email.as_deref().map(str::trim).filter(|u| !u.is_empty())) {
@@ -145,13 +146,12 @@ async fn request_api_key(backend: &Backend, session: &Session, p: SetupParams) -
     }
     let raw_key = key.text.trim().trim_matches('"').to_string();
     backend.set_api_key(raw_key.clone());
-    Ok(json!({
+    let stored = keep_key(store, &raw_key);
+    Ok(merge(json!({
         "apiKey": raw_key,
         "inUse": "This server is now using the key; the other Meridian tools work for the rest of this session.",
-        "next": "Tell the user to keep the key: it is shown only once and is not saved anywhere. To use it in future \
-                 sessions they set MERIDIAN_API_KEY in this server's MCP configuration. Treat it as a secret and \
-                 do not write it into the repository."
-    }))
+        "next": KEY_NEXT
+    }), stored))
 }
 
 async fn buy_credits(backend: &Backend, p: SetupParams) -> Outcome {
@@ -188,7 +188,7 @@ fn reply_message(reply: Reply) -> String {
 }
 
 /// Pay-first: no email, password or captcha. The Bitcoin payment is what proves the sign-up is real.
-async fn signup_with_bitcoin(backend: &Backend, session: &Session, p: SetupParams) -> Outcome {
+async fn signup_with_bitcoin(backend: &Backend, session: &Session, store: &Store, p: SetupParams) -> Outcome {
     let body = match p.credits {
         Some(credits) => json!({ "credits": credits }),
         None => json!({}),
@@ -204,20 +204,47 @@ async fn signup_with_bitcoin(backend: &Backend, session: &Session, p: SetupParam
     ) else {
         return Err("Meridian returned no sign-up.".into());
     };
-    session.set_signup(id, secret);
+    session.set_signup(id.clone(), secret.clone());
+    // Saved before the invoice is shown to anyone, so a crash or restart between "pay this" and "payment arrived" cannot
+    // lose the only way back into the sign-up.
+    let saved = store.save_signup(PendingSignup {
+        id,
+        claim_secret: secret,
+        address: v.get("address").and_then(Value::as_str).map(str::to_string),
+        created_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    });
+    match saved {
+        Ok(s) => {
+            // Not echoed: the agent does not need the secret, and the transcript should not hold it.
+            if let Some(o) = v.as_object_mut() {
+                o.remove("claimSecret");
+            }
+            v["stored"] = json!(s.path.display().to_string());
+            v["encrypted"] = json!(s.encrypted);
+        }
+        Err(e) => {
+            v["storageWarning"] = json!(format!(
+                "The sign-up was NOT saved locally: {e}. The claimSecret in this result is the only way back into it if this \
+                 server stops; tell the user to keep it."
+            ));
+        }
+    }
     v["next"] = json!(
         "Show the user the address, the amount in sats (or the bitcoinUri) and when it expires. They pay from their own \
          wallet; this tool cannot send Bitcoin. The amount is the minimum, not a fixed price: if they send more, they \
          get more credits (usdPerCredit each, rounded down), so ask whether they want to send more. Sending less than \
-         the minimum buys nothing. The account does not exist for use until the payment confirms. Keep the \
-         claimSecret: it is the only way back into this sign-up, so tell the user to store it safely if this session may \
-         end. Then call `meridian_setup` with action `signup_status` until it reports the API key."
+         the minimum buys nothing. The account does not exist for use until the payment confirms. The sign-up is saved \
+         locally (see `stored`), so it survives this server restarting. Then call `meridian_setup` with action \
+         `request_api_key` or `signup_status` until it reports the API key."
     );
     Ok(v)
 }
 
 /// Checks a pay-first sign-up; once paid, collects the API key and starts using it.
-async fn signup_status(backend: &Backend, session: &Session, p: SetupParams) -> Outcome {
+async fn signup_status(backend: &Backend, session: &Session, store: &Store, p: SetupParams) -> Outcome {
     let (id, secret) = signup_credentials(session, &p)?;
     let headers = [("X-Claim-Secret", secret.as_str())];
     let r = backend.raw(Method::GET, &format!("/mcp/v1/signup/{id}"), None, None, &headers).await?;
@@ -231,16 +258,14 @@ async fn signup_status(backend: &Backend, session: &Session, p: SetupParams) -> 
             which answers 402 until the payment is confirmed. If the payment request has expired, start a new sign-up.");
         return Ok(status);
     }
-    let key = fetch_signup_key(backend, session, &id, &secret).await?;
-    Ok(json!({
+    let (key, stored) = fetch_signup_key(backend, session, store, &id, &secret).await?;
+    Ok(merge(json!({
         "status": "PAID",
         "credits": status.get("credits"),
         "apiKey": key,
         "inUse": "This server is now using the key; the other Meridian tools work for the rest of this session.",
-        "next": "Tell the user to keep the key: it is not saved anywhere, and to use it in future sessions they set \
-                 MERIDIAN_API_KEY in this server's MCP configuration. This account has no email or password yet; to \
-                 sign in to the Meridian web app they open its 'Claim your account' page and enter the key."
-    }))
+        "next": KEY_NEXT_CLAIM
+    }), stored))
 }
 
 /// The sign-up's ID and claim secret: from the call, else the one this session started.
@@ -258,7 +283,13 @@ fn signup_credentials(session: &Session, p: &SetupParams) -> Result<(String, Str
 
 /// Asks for the pay-first account's API key. Paid: the key, now in use. Not paid: an error carrying `402
 /// PAYMENT_REQUIRED` and how far the payment has got (for example `PENDING` with its transaction).
-async fn fetch_signup_key(backend: &Backend, session: &Session, id: &str, secret: &str) -> Result<String, String> {
+async fn fetch_signup_key(
+    backend: &Backend,
+    session: &Session,
+    store: &Store,
+    id: &str,
+    secret: &str,
+) -> Result<(String, Value), String> {
     let headers = [("X-Claim-Secret", secret)];
     let k = backend.raw(Method::POST, &format!("/mcp/v1/signup/{id}/api-key"), None, None, &headers).await?;
     if k.status == 402 {
@@ -272,17 +303,44 @@ async fn fetch_signup_key(backend: &Backend, session: &Session, id: &str, secret
     };
     backend.set_api_key(key.clone());
     session.clear_signup();
-    Ok(key)
+    // Kept before the key is shown to anyone. The sign-up's claim secret stays in the store too: it can issue a
+    // replacement key if this one is ever lost, until the account is claimed in the web app.
+    let stored = keep_key(store, &key);
+    Ok((key, stored))
 }
 
-async fn signup_api_key(backend: &Backend, session: &Session, p: &SetupParams) -> Outcome {
+async fn signup_api_key(backend: &Backend, session: &Session, store: &Store, p: &SetupParams) -> Outcome {
     let (id, secret) = signup_credentials(session, p)?;
-    let key = fetch_signup_key(backend, session, &id, &secret).await?;
-    Ok(json!({
+    let (key, stored) = fetch_signup_key(backend, session, store, &id, &secret).await?;
+    Ok(merge(json!({
         "apiKey": key,
         "inUse": "This server is now using the key; the other Meridian tools work for the rest of this session.",
-        "next": "Tell the user to keep the key: it is not saved anywhere, and to use it in future sessions they set \
-                 MERIDIAN_API_KEY in this server's MCP configuration. To sign in to the Meridian web app they open its \
-                 'Claim your account' page and enter the key."
-    }))
+        "next": KEY_NEXT_CLAIM
+    }), stored))
 }
+
+/// Keeps the API key locally. Returns what to tell the agent: where it was kept, or why it could not be.
+fn keep_key(store: &Store, key: &str) -> Value {
+    match store.save_key(key) {
+        Ok(saved) => json!({ "stored": saved.path.display().to_string(), "encrypted": saved.encrypted }),
+        Err(e) => json!({
+            "storageWarning": format!("The API key was NOT saved: {e}. Tell the user to keep it, or it is lost when this server stops.")
+        }),
+    }
+}
+
+fn merge(mut v: Value, extra: Value) -> Value {
+    if let (Some(into), Some(from)) = (v.as_object_mut(), extra.as_object()) {
+        for (k, val) in from {
+            into.insert(k.clone(), val.clone());
+        }
+    }
+    v
+}
+
+const KEY_NEXT: &str = "The key is saved locally (see `stored`), so future sessions pick it up without MERIDIAN_API_KEY. \
+    It is shown here once; do not paste it anywhere else or write it into the repository.";
+
+const KEY_NEXT_CLAIM: &str = "The key is saved locally (see `stored`), so future sessions pick it up without MERIDIAN_API_KEY. \
+    It is shown here once, for the web app: this account has no email or password yet, so to sign in there the user opens \
+    its 'Claim your account' page and enters the key. Do not paste it anywhere else or write it into the repository.";

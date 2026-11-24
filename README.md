@@ -24,7 +24,7 @@ agent --stdio MCP--> meridian-mcp --HTTPS--> meridian-backend
 ## Principles
 
 - **Stateless client.** No local copy of the Architecture Model, no AI calls. The backend owns the
-  model, the gap rules, entitlements, and payments.
+  model, the gap rules, entitlements, and payments. The one thing kept locally is the account's credentials (below).
 - **Deterministic gap detection.** The backend's rules decide what is missing and what to ask; an
   LLM may only phrase questions. Same observations in, same questions out.
 - **The connector scans locally and sends what the backend needs.** It sends structured observations
@@ -49,6 +49,33 @@ agent --stdio MCP--> meridian-mcp --HTTPS--> meridian-backend
 | `meridian_model`    | Read the current model, completeness map, findings, and decisions      | Free        |
 | `meridian_account`  | Show your credits, the least a run costs, your usage and projects      | Free        |
 | `meridian_setup`    | Create an account, get an API key, buy credits with Bitcoin            | Free        |
+
+### Local credentials
+
+`meridian_setup` keeps what must not be lost between sessions: the account's API key, and, from the moment a pay-first
+sign-up is created, its claim secret (the only way back into a sign-up whose payment has not arrived yet). They go
+before anything is shown to the agent, so a crash or restart between "pay this" and "payment arrived" loses nothing.
+The next start picks them up: `request_api_key` or `signup_status` resumes the sign-up, and the stored key is used
+without `MERIDIAN_API_KEY` (a key in the environment wins).
+
+| Platform | Folder (or `MERIDIAN_MCP_HOME`)                           |
+|----------|-----------------------------------------------------------|
+| Linux    | `$XDG_CONFIG_HOME/meridian-mcp`, else `~/.config/meridian-mcp` |
+| macOS    | `~/Library/Application Support/meridian-mcp`              |
+| Windows  | `%APPDATA%\meridian-mcp`                                  |
+
+- **Default: a private file.** `credentials.json`, mode 0600 in a 0700 folder on Unix (Windows relies on the profile
+  folder's permissions), written atomically, one entry per backend URL. This suits an agent with no password to
+  remember. It is as exposed as an API key in an MCP configuration: anything running as the user can read it.
+- **Opt in: encrypted.** Set `MERIDIAN_VAULT_PASSWORD` in this server's environment and the store is encrypted
+  (`credentials.enc`: Argon2id and XChaCha20-Poly1305); an existing plaintext file is converted on the next write. A wrong or
+  missing password is refused and never overwrites the file. The password is deliberately not a tool parameter, so it
+  does not pass through the agent's context. It is separate from any Meridian account password (a pay-first account has
+  none until claimed).
+- **Not stored:** the Architecture Passphrase (memory only, as before) and any model content.
+- **Not echoed:** the claim secret is never returned to the agent. The API key is returned once, when issued, because
+  the web app's claim page needs it.
+- **No keychain support.** Encryption at rest is the vault password above.
 
 ### Getting started without a key
 
@@ -95,7 +122,9 @@ optional `passphrase`; `meridian_projects` needs a passphrase only to create.
 
 | Variable           | Purpose                                          | Default                                              |
 |--------------------|--------------------------------------------------|------------------------------------------------------|
-| `MERIDIAN_API_KEY` | API key from `meridian-web` or `meridian_setup` (never logged) | optional                               |
+| `MERIDIAN_API_KEY` | API key from `meridian-web` or `meridian_setup` (never logged) | optional; wins over the stored key    |
+| `MERIDIAN_MCP_HOME` | Folder for the local credential store                          | the user's config folder (below)       |
+| `MERIDIAN_VAULT_PASSWORD` | Encrypts the credential store when set                    | unset: the file is not encrypted       |
 | `MERIDIAN_API_URL` | Backend base URL                                 | `https://resolvingarchitecture.io/apps/meridian/api` |
 
 ## Build and run
@@ -147,6 +176,7 @@ smoke-tests a package for the current machine only. The builds are not code-sign
 | `src/setup.rs`   | `meridian_setup`: account, API key, Bitcoin credits     |
 | `src/backend.rs` | HTTPS client for `meridian-backend`; classifies replies |
 | `src/session.rs` | In-memory passphrase holder (never persisted)           |
+| `src/store.rs`   | Local credential store: private file, optional encryption |
 | `src/config.rs`  | Environment configuration                               |
 
 ## Status
