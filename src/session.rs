@@ -7,6 +7,8 @@ use std::sync::Mutex;
 #[derive(Default)]
 pub struct Session {
     passphrase: Mutex<Option<String>>,
+    /// A pay-first sign-up in progress: (signup ID, claim secret). Memory only.
+    signup: Mutex<Option<(String, String)>>,
 }
 
 impl Session {
@@ -17,6 +19,18 @@ impl Session {
             *held = Some(p);
         }
         held.clone()
+    }
+
+    pub fn set_signup(&self, id: String, secret: String) {
+        *self.signup.lock().unwrap_or_else(|e| e.into_inner()) = Some((id, secret));
+    }
+
+    pub fn signup(&self) -> Option<(String, String)> {
+        self.signup.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn clear_signup(&self) {
+        *self.signup.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     /// Forget the passphrase, for example after the backend rejects it.

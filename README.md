@@ -48,6 +48,25 @@ agent --stdio MCP--> meridian-mcp --HTTPS--> meridian-backend
 | `meridian_evaluate` | Run an entitled service, or `quote_only` to see its price first        | Per service |
 | `meridian_model`    | Read the current model, completeness map, findings, and decisions      | Free        |
 | `meridian_account`  | Show your credits, the least a run costs, your usage and projects      | Free        |
+| `meridian_setup`    | Create an account, get an API key, buy credits with Bitcoin            | Free        |
+
+### Getting started without a key
+
+The fully automatic path needs no email, password or captcha. `signup_with_bitcoin` (N credits) returns a Bitcoin
+address and amount; the user pays from their own wallet; `signup_status` then waits for the payment, collects the API key
+and starts using it. The first purchase must be at least 5 USD. The account has no email or password until the person
+opens the web app's `/claim` page and enters the key. The steps below are the email route.
+
+`MERIDIAN_API_KEY` is optional. With no key the server still starts, and `meridian_setup` walks a new user through:
+
+1. `create_account`: email, password, optional username. Meridian emails a verification link. Production sign-up is
+   protected by a Cloudflare Turnstile check that only a browser can pass; if it refuses the call, the user signs up in
+   the web app instead and continues from step 2.
+2. `request_api_key`: signs in once (the password is used for that call and not kept), issues the key, and the server
+   uses it from then on. The key is shown once; to keep it across sessions the user sets `MERIDIAN_API_KEY`.
+   `replace_existing` revokes an existing key.
+3. `buy_credits`: N credits, paid in Bitcoin. Returns the address, amount in sats, a `bitcoin:` URI and the expiry. The
+   user pays from their own wallet; `purchase_status` reports `PAID` once it confirms.
 
 ### Review reports
 
@@ -76,7 +95,7 @@ optional `passphrase`; `meridian_projects` needs a passphrase only to create.
 
 | Variable           | Purpose                                          | Default                                              |
 |--------------------|--------------------------------------------------|------------------------------------------------------|
-| `MERIDIAN_API_KEY` | API key created in `meridian-web` (never logged) | required                                             |
+| `MERIDIAN_API_KEY` | API key from `meridian-web` or `meridian_setup` (never logged) | optional                               |
 | `MERIDIAN_API_URL` | Backend base URL                                 | `https://resolvingarchitecture.io/apps/meridian/api` |
 
 ## Build and run
@@ -124,7 +143,8 @@ smoke-tests a package for the current machine only. The builds are not code-sign
 | Path             | Purpose                                                 |
 |------------------|---------------------------------------------------------|
 | `src/main.rs`    | CLI entry point (Clap) and stdio MCP server startup     |
-| `src/tools.rs`   | The four MCP tools, each forwarding to the backend      |
+| `src/tools.rs`   | The MCP tools, each forwarding to the backend           |
+| `src/setup.rs`   | `meridian_setup`: account, API key, Bitcoin credits     |
 | `src/backend.rs` | HTTPS client for `meridian-backend`; classifies replies |
 | `src/session.rs` | In-memory passphrase holder (never persisted)           |
 | `src/config.rs`  | Environment configuration                               |

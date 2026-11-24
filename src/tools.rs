@@ -281,6 +281,24 @@ impl MeridianTools {
         }
     }
 
+    #[tool(description = "Get a person started with Meridian from nothing. Fully automatic, no email or captcha: \
+        `signup_with_bitcoin` (N credits) returns a Bitcoin address and amount for the user to pay from their own \
+        wallet, and `signup_status` then waits for the payment and, once it confirms, collects the API key and starts \
+        using it. Or, with an email: action `create_account` signs them up \
+        (email, password, optional username; Meridian emails a verification link they must open); `request_api_key` \
+        signs in once and issues an API key, which this server then uses for the other tools (the key is shown \
+        only once: tell the user to keep it); `buy_credits` starts a Bitcoin purchase of N credits and returns the \
+        address and amount for the user to pay from their own wallet; `purchase_status` checks it (PAID when \
+        confirmed). Ask the user to choose and supply the password; it is never stored. Needs no API key for the \
+        first two actions.")]
+    async fn meridian_setup(&self, p: Parameters<crate::setup::SetupParams>) -> Result<CallToolResult, McpError> {
+        let text = match crate::setup::run(&self.backend, &self.session, p.0).await {
+            Ok(v) => return Ok(CallToolResult::success(vec![ContentBlock::text(v.to_string())])),
+            Err(m) => m,
+        };
+        Ok(CallToolResult::error(vec![ContentBlock::text(text)]))
+    }
+
     #[tool(description = "Show the signed-in account: the user's name, how many credits they have and what one run of \
         each service costs (and whether they can afford it), how many reviews they have run, and how many projects \
         they have. Takes no arguments and needs no passphrase. Call it before `meridian_evaluate` to check the user \
@@ -393,7 +411,8 @@ impl ServerHandler for MeridianTools {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("meridian-mcp", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Meridian captures a project's architecture through an interview. Start with \
+                "Meridian captures a project's architecture through an interview. If the user has no \
+                 account or API key yet, start with `meridian_setup`. Start with \
                  `meridian_projects` to find or create the project. Then call `meridian_next` \
                  repeatedly: it returns what is missing as questions. Answer from the repository \
                  where you can and ask the user where you cannot, then pass the answers back (as \

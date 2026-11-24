@@ -7,6 +7,7 @@ mod backend;
 mod config;
 mod review_report;
 mod session;
+mod setup;
 mod tools;
 
 use anyhow::Result;
