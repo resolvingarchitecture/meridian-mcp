@@ -31,7 +31,7 @@ pub struct SetupParams {
     /// `request_api_key`: true to revoke the account's current key and issue a new one. Anything using the old key
     /// stops working, so only set it when the user has said so.
     pub replace_existing: Option<bool>,
-    /// `signup_with_bitcoin`: optional. The first payment must be worth at least 5 USD, which is what is invoiced when
+    /// `signup_with_bitcoin`: optional. The first payment must be worth at least 10 USD, which is what is invoiced when
     /// this is left out. It is a minimum, not a price: a Bitcoin payment of more buys more credits (at the credit rate,
     /// rounded down to whole credits). `buy_credits`: how many credits to buy (1 to 10000).
     pub credits: Option<u32>,

@@ -81,7 +81,7 @@ without `MERIDIAN_API_KEY` (a key in the environment wins).
 
 The fully automatic path needs no email, password or captcha. `signup_with_bitcoin` (N credits) returns a Bitcoin
 address and amount; the user pays from their own wallet; `signup_status` then waits for the payment, collects the API key
-and starts using it. The first payment must be worth at least 5 USD; that is a minimum, not a price, and a Bitcoin payment of more buys more credits at the credit rate (rounded down). The account has no email or password until the person
+and starts using it. The first payment must be worth at least 10 USD; that is a minimum, not a price, and a Bitcoin payment of more buys more credits at the credit rate (rounded down). The account has no email or password until the person
 opens the web app's `/claim` page and enters the key. The steps below are the email route.
 
 `MERIDIAN_API_KEY` is optional. With no key the server still starts, and `meridian_setup` walks a new user through:
