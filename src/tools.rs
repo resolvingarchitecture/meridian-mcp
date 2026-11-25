@@ -386,7 +386,7 @@ impl MeridianTools {
         review goes in `full/` and a change review in `intermed/`. The saved \
         file records the project's version at the time of the review; `savedTo` says where it went. A review is priced from the \
         size of the project, so call it first with `quote_only` to see the price and whether the user can afford \
-        it (a change review has a fixed price); credits are charged only if the review completes.")]
+        it (a change review is priced from the size of the change); credits are charged only if the review completes.")]
     async fn meridian_evaluate(
         &self,
         p: Parameters<EvaluateParams>,
@@ -396,10 +396,10 @@ impl MeridianTools {
         let path = format!("/projects/{}/evaluate", p.project);
         let intermediate = is_intermediate(&p.service);
         let service = if intermediate { "REVIEW_INTERMEDIATE".to_string() } else { p.service.clone() };
-        let body = if p.quote_only.unwrap_or(false) {
-            json!({ "service": service, "options": { "quoteOnly": true } })
-        } else if intermediate {
-            // The change is read from the local repository here and sent for the review; it is not written anywhere.
+        let quote_only = p.quote_only.unwrap_or(false);
+        let body = if intermediate {
+            // A change review is priced from the change, so a quote needs it too. It is read from the local
+            // repository here and sent for the review; it is not written anywhere.
             let root = match repo_root(p.repo_path.as_deref()) {
                 Ok(root) => root,
                 Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
@@ -407,10 +407,16 @@ impl MeridianTools {
             match crate::change::collect(&root, p.base.as_deref()) {
                 Ok(change) => {
                     let summary = p.change_summary.clone().or(change.summary);
-                    json!({ "service": service, "options": { "changes": change.diff, "changeSummary": summary } })
+                    let mut options = json!({ "changes": change.diff, "changeSummary": summary });
+                    if quote_only {
+                        options["quoteOnly"] = json!(true);
+                    }
+                    json!({ "service": service, "options": options })
                 }
                 Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
             }
+        } else if quote_only {
+            json!({ "service": service, "options": { "quoteOnly": true } })
         } else {
             json!({ "service": service })
         };
