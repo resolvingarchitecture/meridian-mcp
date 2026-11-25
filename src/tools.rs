@@ -159,11 +159,19 @@ pub struct SubmitParams {
 #[derive(Deserialize, JsonSchema)]
 pub struct EvaluateParams {
     pub project: String,
-    /// Service to run, for example `review`, `feasibility`, `tech_evaluation`.
+    /// Service to run: `review_full` (the whole project) or `review_intermediate` (one change, compared with the
+    /// architecture and the last full review). Other services are not available through the MCP yet.
     pub service: String,
-    /// Directory to save a finished review's markdown report in. When omitted it is chosen for you: the
-    /// `reviews/` folder of the git repository around `repo_path`, or, when `repo_path` holds several
-    /// repositories, of its architecture, design, or admin folder, else the `reviews/` folder of `repo_path`.
+    /// `review_intermediate` only: the git ref (branch, tag, or commit) to review all changes since, committed or
+    /// not. When omitted, the uncommitted changes are reviewed, or the last commit when there are none.
+    pub base: Option<String>,
+    /// `review_intermediate` only: a few words saying what the change is for. Defaults to the last commit's subject
+    /// when the last commit is the change.
+    pub change_summary: Option<String>,
+    /// Directory to save a finished review's markdown report in, used as given. When omitted it is chosen for you:
+    /// the `reviews/` folder of the git repository around `repo_path`, or, when `repo_path` holds several
+    /// repositories, of its architecture, design, or admin folder, else the `reviews/` folder of `repo_path`; inside
+    /// it, `full/` for a full review and `intermed/` for a change review.
     pub save_to: Option<String>,
     /// Repository root, used to read the project's version and to build the suggested location.
     /// Defaults to the server's working directory.
@@ -368,14 +376,17 @@ impl MeridianTools {
         .await
     }
 
-    #[tool(description = "Run an entitled Meridian service (review, feasibility, and so on) \
-        against the project. Waits for the result. A finished review comes back as a markdown \
+    #[tool(description = "Run a Meridian review against the project: `review_full` for the whole project, or \
+        `review_intermediate` for one change (the git diff since `base`, else the uncommitted changes, else the last \
+        commit), checked for architectural drift against the model and the last full review; run a full review first. \
+        Waits for the result. A finished review comes back as a markdown \
         `report`, and is saved straight away: in `save_to` if given, otherwise in the `reviews/` \
         folder of the git repository it belongs in (or of an architecture, design, or admin folder when \
-        the work spans several repositories), otherwise in the `reviews/` folder of `repo_path`. The saved \
+        the work spans several repositories), otherwise in the `reviews/` folder of `repo_path`; inside it, a full \
+        review goes in `full/` and a change review in `intermed/`. The saved \
         file records the project's version at the time of the review; `savedTo` says where it went. A review is priced from the \
         size of the project, so call it first with `quote_only` to see the price and whether the user can afford \
-        it; credits are charged only if the review completes.")]
+        it (a change review has a fixed price); credits are charged only if the review completes.")]
     async fn meridian_evaluate(
         &self,
         p: Parameters<EvaluateParams>,
@@ -383,10 +394,25 @@ impl MeridianTools {
         let p = p.0;
         let held = self.session.resolve(p.passphrase.clone());
         let path = format!("/projects/{}/evaluate", p.project);
+        let intermediate = is_intermediate(&p.service);
+        let service = if intermediate { "REVIEW_INTERMEDIATE".to_string() } else { p.service.clone() };
         let body = if p.quote_only.unwrap_or(false) {
-            json!({ "service": p.service, "options": { "quoteOnly": true } })
+            json!({ "service": service, "options": { "quoteOnly": true } })
+        } else if intermediate {
+            // The change is read from the local repository here and sent for the review; it is not written anywhere.
+            let root = match repo_root(p.repo_path.as_deref()) {
+                Ok(root) => root,
+                Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
+            };
+            match crate::change::collect(&root, p.base.as_deref()) {
+                Ok(change) => {
+                    let summary = p.change_summary.clone().or(change.summary);
+                    json!({ "service": service, "options": { "changes": change.diff, "changeSummary": summary } })
+                }
+                Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
+            }
         } else {
-            json!({ "service": p.service })
+            json!({ "service": service })
         };
         let first = self
             .backend
@@ -476,11 +502,21 @@ fn save_review(reply: Reply, p: &EvaluateParams) -> Reply {
         None => {
             let found = crate::review_report::resolve_destination(&root);
             v["destinationReason"] = json!(found.reason);
-            found.dir
+            // Full reviews and change reviews each have a folder inside `reviews/`.
+            match v.get("service").and_then(Value::as_str).and_then(crate::review_report::subfolder) {
+                Some(sub) => found.dir.join(sub),
+                None => found.dir,
+            }
         }
     };
     apply_save(&mut v, &dir, &root, p.version.as_deref(), &p.project);
     Reply::Ok(v)
+}
+
+/// Whether `service` names the intermediate (single change) review, in any of the spellings an agent is likely to use.
+fn is_intermediate(service: &str) -> bool {
+    let norm = service.trim().to_uppercase().replace(['-', ' '], "_");
+    matches!(norm.as_str(), "REVIEW_INTERMEDIATE" | "INTERMEDIATE" | "INTERMEDIATE_REVIEW" | "CHANGE_REVIEW")
 }
 
 fn repo_root(repo_path: Option<&str>) -> Result<std::path::PathBuf, String> {
@@ -515,5 +551,20 @@ mod observation_tests {
         assert_eq!(v["kind"], "SOURCE");
         assert_eq!(v["path"], "src/Bus.java");
         assert_eq!(v["content"], "class Bus {}");
+    }
+}
+
+#[cfg(test)]
+mod service_name_tests {
+    use super::is_intermediate;
+
+    #[test]
+    fn the_intermediate_review_is_recognised_in_the_spellings_an_agent_uses() {
+        for name in ["review_intermediate", "REVIEW_INTERMEDIATE", "intermediate", "Intermediate Review", "change-review"] {
+            assert!(is_intermediate(name), "{name}");
+        }
+        for name in ["review_full", "review", "design", ""] {
+            assert!(!is_intermediate(name), "{name}");
+        }
     }
 }

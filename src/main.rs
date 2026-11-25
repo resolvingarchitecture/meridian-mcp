@@ -4,6 +4,7 @@
 //! `meridian-backend`. It holds no copy of the Architecture Model and makes no AI calls.
 
 mod backend;
+mod change;
 mod config;
 mod review_report;
 mod session;

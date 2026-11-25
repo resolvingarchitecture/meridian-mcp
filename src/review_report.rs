@@ -5,7 +5,8 @@
 //! so the user need not type one: inside a git repository the report goes in that repository's
 //! `reviews/`; across several repositories it goes in the `reviews/` of an architecture, design, or
 //! admin folder. When neither applies it goes in the `reviews/` folder of the path it was asked about, so a
-//! report is never left in a hidden place. Every report records the project version at the time of the review in its
+//! report is never left in a hidden place. Inside `reviews/`, full reviews go in `full/` and intermediate (change)
+//! reviews in `intermed/`. Every report records the project version at the time of the review in its
 //! front matter and in its file name, so reports for different versions sit side by side.
 
 use serde_json::Value;
@@ -100,6 +101,16 @@ pub struct Saved {
 
 /// The folder a project's reviews are saved in: `<project>/reviews`, for example `seda-bus-java/reviews`.
 pub const REVIEWS_DIR: &str = "reviews";
+
+/// The folder inside `reviews/` a service's reports go in: `full` for a full review, `intermed` for a change review.
+/// Any other service has no subfolder.
+pub fn subfolder(service: &str) -> Option<&'static str> {
+    match service.trim().to_uppercase().as_str() {
+        "REVIEW_FULL" => Some("full"),
+        "REVIEW_INTERMEDIATE" => Some("intermed"),
+        _ => None,
+    }
+}
 
 /// Where a report goes without being told: the `reviews/` folder it belongs in, and why.
 #[derive(Debug, PartialEq, Eq)]
@@ -377,5 +388,13 @@ mod tests {
         let result = json!({ "service": "S", "evaluationId": "i", "evaluatedAt": "2026-11-17", "report": "r" });
         let saved = save(&dir.join(REVIEWS_DIR), &dir, Some("../../etc/x"), "p", &result).unwrap();
         assert!(saved.path.starts_with(dir.canonicalize().unwrap().join(REVIEWS_DIR)), "{:?}", saved.path);
+    }
+
+    #[test]
+    fn each_review_service_has_its_own_subfolder() {
+        assert_eq!(subfolder("REVIEW_FULL"), Some("full"));
+        assert_eq!(subfolder("review_intermediate"), Some("intermed"));
+        assert_eq!(subfolder("DESIGN"), None);
+        assert_eq!(subfolder(""), None);
     }
 }
