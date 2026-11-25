@@ -19,6 +19,11 @@ Status key: `[x]` done, `[ ]` open. Decisions are in `ADR-AppArch-25`.
       changes, else the last commit; at most 512 KiB; refuses a `base` that looks like an option), the report is saved like a
       full review's. Not yet run against a live model.
 
+- [x] Source evidence is kept current (0.9.0): `change.rs` takes the backend's evidence revision as the default diff base, sends
+      the changed files (and removed paths) with `evidence/sync` after a review, reconciles the files the backend holds before
+      a full review (`sync_evidence`) and after history was rewritten, and labels a dirty tree with a content hash. Not yet run
+      against the live backend.
+
 ## Backend contract (blocks real use)
 
 The v1 contract is `meridian-docs/architecture/mcp-api.md` (proposed). The backend work is tracked in

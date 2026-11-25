@@ -168,6 +168,11 @@ pub struct EvaluateParams {
     /// `review_intermediate` only: a few words saying what the change is for. Defaults to the last commit's subject
     /// when the last commit is the change.
     pub change_summary: Option<String>,
+    /// Bring the project's stored source evidence up to date with the files on disk before the review: send the files
+    /// Meridian already holds that have changed, and drop the ones that are gone. Defaults to true for `review_full`
+    /// and false for `review_intermediate`, which updates the evidence from the change it just reviewed (it also
+    /// reconciles by itself when history was rewritten).
+    pub sync_evidence: Option<bool>,
     /// Directory to save a finished review's markdown report in, used as given. When omitted it is chosen for you:
     /// the `reviews/` folder of the git repository around `repo_path`, or, when `repo_path` holds several
     /// repositories, of its architecture, design, or admin folder, else the `reviews/` folder of `repo_path`; inside
@@ -377,8 +382,10 @@ impl MeridianTools {
     }
 
     #[tool(description = "Run a Meridian review against the project: `review_full` for the whole project, or \
-        `review_intermediate` for one change (the git diff since `base`, else the uncommitted changes, else the last \
-        commit), checked for architectural drift against the model and the last full review; run a full review first. \
+        `review_intermediate` for one change (the git diff since `base`, else since the last revision Meridian reviewed, \
+        else the uncommitted changes, else the last commit), checked for architectural drift against the model and the last \
+        full review; run a full review first. The diff is not stored; after the review the files it touched replace the \
+        stored source evidence (deleted ones are removed), so the next change starts from where this one ended. \
         Waits for the result. A finished review comes back as a markdown \
         `report`, and is saved straight away: in `save_to` if given, otherwise in the `reviews/` \
         folder of the git repository it belongs in (or of an architecture, design, or admin folder when \
@@ -393,60 +400,192 @@ impl MeridianTools {
     ) -> Result<CallToolResult, McpError> {
         let p = p.0;
         let held = self.session.resolve(p.passphrase.clone());
-        let path = format!("/projects/{}/evaluate", p.project);
         let intermediate = is_intermediate(&p.service);
         let service = if intermediate { "REVIEW_INTERMEDIATE".to_string() } else { p.service.clone() };
         let quote_only = p.quote_only.unwrap_or(false);
+        let fail = |e: String| Ok(CallToolResult::error(vec![ContentBlock::text(e)]));
+
+        // Source evidence is only touched for a real review, never for a quote.
+        let sync_flag = !quote_only && p.sync_evidence.unwrap_or(!intermediate);
+        let mut sync_report: Vec<Value> = Vec::new();
+        let mut stored: Option<crate::change::StoredEvidence> = None;
+        let root = if intermediate || sync_flag {
+            match repo_root(p.repo_path.as_deref()) {
+                Ok(root) => Some(root),
+                Err(e) => return fail(e),
+            }
+        } else {
+            None
+        };
+        if intermediate || sync_flag {
+            match self.fetch_evidence(&p.project, held.as_deref()).await {
+                Ok(e) => stored = Some(e),
+                Err(reply) => return self.finish(reply, held.is_some()),
+            }
+        }
+
+        // Reconcile what Meridian holds with the files on disk first, when asked (a full review's default).
+        if sync_flag && !intermediate {
+            if let (Some(root), Some(evidence)) = (&root, &stored) {
+                match crate::change::reconcile(root, evidence) {
+                    Ok(r) => sync_report.push(
+                        self.push_evidence(&p.project, held.as_deref(), r.files, r.removed, Some(r.revision), "before the review").await,
+                    ),
+                    Err(e) => sync_report.push(json!({ "when": "before the review", "error": e })),
+                }
+            }
+        }
+
+        let mut change: Option<crate::change::Change> = None;
         let body = if intermediate {
-            // A change review is priced from the change, so a quote needs it too. It is read from the local
-            // repository here and sent for the review; it is not written anywhere.
-            let root = match repo_root(p.repo_path.as_deref()) {
-                Ok(root) => root,
-                Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
-            };
-            match crate::change::collect(&root, p.base.as_deref()) {
-                Ok(change) => {
-                    let summary = p.change_summary.clone().or(change.summary);
-                    let mut options = json!({ "changes": change.diff, "changeSummary": summary });
+            // A change review is priced from the change, so a quote needs it too. The diff is read from the local
+            // repository here and sent for the one review; it is not stored.
+            let root = root.as_ref().expect("a root is resolved for an intermediate review");
+            let evidence_revision = stored.as_ref().and_then(|e| e.revision.clone());
+            match crate::change::collect(root, p.base.as_deref(), evidence_revision.as_deref()) {
+                Ok(c) => {
+                    if c.base_missing && !quote_only {
+                        // History was rewritten: make the evidence match the files as they are, then review what is left.
+                        if let Some(evidence) = &stored {
+                            match crate::change::reconcile(root, evidence) {
+                                Ok(r) => sync_report.push(
+                                    self.push_evidence(&p.project, held.as_deref(), r.files, r.removed, Some(r.revision), "history was rewritten").await,
+                                ),
+                                Err(e) => sync_report.push(json!({ "when": "history was rewritten", "error": e })),
+                            }
+                        }
+                    }
+                    let summary = p.change_summary.clone().or_else(|| c.summary.clone());
+                    let mut options = json!({
+                        "changes": c.diff,
+                        "changeSummary": summary,
+                        "revision": c.revision,
+                        "baseRevision": c.base_revision,
+                    });
                     if quote_only {
                         options["quoteOnly"] = json!(true);
                     }
+                    change = Some(c);
                     json!({ "service": service, "options": options })
                 }
-                Err(e) => return Ok(CallToolResult::error(vec![ContentBlock::text(e)])),
+                Err(e) => return fail(e),
             }
         } else if quote_only {
             json!({ "service": service, "options": { "quoteOnly": true } })
         } else {
             json!({ "service": service })
         };
+
+        let path = format!("/projects/{}/evaluate", p.project);
         let first = self
             .backend
             .call(Method::POST, &path, Some(body), held.as_deref(), true, None)
             .await;
         // A 202 carries an evaluationId; poll until the result is ready.
-        if let Reply::Ok(v) = &first {
+        let mut result = first;
+        if let Reply::Ok(v) = &result {
             if v.get("status").and_then(Value::as_str) == Some("RUNNING") {
                 if let Some(id) = v.get("evaluationId").and_then(Value::as_str) {
                     let poll = format!("/projects/{}/evaluations/{}", p.project, id);
+                    let mut finished = None;
                     // A review is one long model call; wait up to fifteen minutes for it.
                     for _ in 0..450 {
                         tokio::time::sleep(Duration::from_secs(2)).await;
                         match self.backend.call(Method::GET, &poll, None, held.as_deref(), false, None).await {
                             Reply::Ok(r) if r.get("status").and_then(Value::as_str) == Some("RUNNING") => {}
-                            other => return self.finish(save_review(other, &p), held.is_some()),
+                            other => {
+                                finished = Some(other);
+                                break;
+                            }
                         }
                     }
-                    let mut still = v.clone();
-                    still["note"] = json!(
-                        "Still running after fifteen minutes. Call meridian_evaluate again to rejoin this \
-                         evaluation; it will not start a second one."
-                    );
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(still.to_string())]));
+                    match finished {
+                        Some(other) => result = other,
+                        None => {
+                            let mut still = v.clone();
+                            still["note"] = json!(
+                                "Still running after fifteen minutes. Call meridian_evaluate again to rejoin this \
+                                 evaluation; it will not start a second one."
+                            );
+                            return Ok(CallToolResult::success(vec![ContentBlock::text(still.to_string())]));
+                        }
+                    }
                 }
             }
         }
-        self.finish(save_review(first, &p), held.is_some())
+
+        // The review is done: bring the evidence up to date with the change it just looked at. A review that could not
+        // run at all leaves the evidence alone, so the next one starts from the same revision.
+        let reviewed = matches!(&result, Reply::Ok(v)
+            if matches!(v.get("status").and_then(Value::as_str), Some("COMPLETE") | Some("NOT_READY")));
+        let note = change.as_ref().and_then(|c| c.note.clone());
+        let covered = change.as_ref().map(|c| c.described_as.clone());
+        if reviewed && !quote_only {
+            if let Some(c) = change.take() {
+                sync_report.push(
+                    self.push_evidence(&p.project, held.as_deref(), c.files, c.removed, Some(c.revision), "after the review").await,
+                );
+            }
+        }
+        if let Reply::Ok(v) = &mut result {
+            if !sync_report.is_empty() {
+                v["evidenceSync"] = Value::Array(sync_report);
+            }
+            if let Some(note) = note {
+                v["note"] = json!(note);
+            }
+            if let Some(covered) = covered {
+                v["changeReviewed"] = json!(covered);
+            }
+        }
+        self.finish(save_review(result, &p), held.is_some())
+    }
+
+    /// The project's stored source evidence: what revision it reflects and each file's hash.
+    async fn fetch_evidence(&self, project: &str, passphrase: Option<&str>) -> Result<crate::change::StoredEvidence, Reply> {
+        match self.backend.call(Method::GET, &format!("/projects/{project}/evidence"), None, passphrase, false, None).await {
+            Reply::Ok(v) => Ok(crate::change::StoredEvidence::from_json(&v)),
+            other => Err(other),
+        }
+    }
+
+    /// Sends files and removals to the backend in as many calls as the limits need; the revision goes with the last, so it
+    /// only advances when everything before it was accepted. Returns what happened, for the result.
+    async fn push_evidence(
+        &self,
+        project: &str,
+        passphrase: Option<&str>,
+        files: Vec<crate::change::EvidenceFile>,
+        removed: Vec<String>,
+        revision: Option<String>,
+        when: &str,
+    ) -> Value {
+        let (mut updated, mut gone, mut rejected) = (0u64, 0u64, Vec::new());
+        let mut recorded: Option<String> = None;
+        let batches = crate::change::batches(files, removed);
+        let last = batches.len() - 1;
+        for (i, batch) in batches.into_iter().enumerate() {
+            let body = json!({
+                "revision": if i == last { revision.clone() } else { None },
+                "files": batch.files.iter().map(|f| json!({ "path": f.path, "content": f.content, "contentHash": f.content_hash })).collect::<Vec<_>>(),
+                "removed": batch.removed,
+            });
+            match self.backend.call(Method::POST, &format!("/projects/{project}/evidence/sync"), Some(body), passphrase, true, None).await {
+                Reply::Ok(v) => {
+                    updated += v.get("updated").and_then(Value::as_u64).unwrap_or(0);
+                    gone += v.get("removed").and_then(Value::as_u64).unwrap_or(0);
+                    if let Some(r) = v.get("rejected").and_then(Value::as_array) {
+                        rejected.extend(r.iter().cloned());
+                    }
+                    if i == last {
+                        recorded = v.get("revision").and_then(Value::as_str).map(str::to_owned);
+                    }
+                }
+                Reply::Failed(e) => return json!({ "when": when, "error": e, "updated": updated, "removed": gone }),
+                _ => return json!({ "when": when, "error": "the passphrase was not accepted for the evidence update", "updated": updated, "removed": gone }),
+            }
+        }
+        json!({ "when": when, "updated": updated, "removed": gone, "revision": recorded, "rejected": rejected })
     }
 
     #[tool(description = "Read the current Architecture Model, completeness map, open questions, \
