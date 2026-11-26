@@ -140,6 +140,14 @@ its configuration file exists (Claude Code) or its settings folder does (the oth
 that is not installed. The installers read the current version from `/meridian/downloads/mcp/LATEST`, which
 `marketing/publish-meridian-mcp.sh` writes; `install.ps1` is not tested in CI.
 
+Two double-click routes need no terminal. **Claude Desktop bundles (`.mcpb`)**: one per platform (Windows, macOS Apple silicon,
+macOS Intel; Claude Desktop does not run on Linux), built by `packaging/mcpb.py` in the release workflow. A bundle is a zip
+with a `manifest.json` (server type `binary`, command `${__dirname}/server/meridian-mcp[.exe]`, args `["serve"]`, the seven
+tools listed, and only its own platform named) and the binary under `server/` with its executable bit kept;
+`packaging/test_mcpb.py` checks that, including that the tools listed are exactly the ones `src/tools.rs` offers. The bundle
+is built and checked here but has not been opened in Claude Desktop in CI. **`install-meridian.cmd`** (on the site, not in the
+packages): double-click on Windows; it runs `install.ps1`.
+
 ## Configuration
 
 | Variable           | Purpose                                          | Default                                              |

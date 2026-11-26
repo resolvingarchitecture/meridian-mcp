@@ -82,12 +82,29 @@ jobs:
           cat "$FILE.sha256"
           echo "file=$FILE" >> "$GITHUB_OUTPUT"
 
+      # The Claude Desktop bundle: double-click it and Claude Desktop installs the connector. Claude Desktop runs on
+      # Windows and macOS, so there is none for Linux.
+      - name: Claude Desktop bundle (.mcpb)
+        if: matrix.label != 'linux-x86_64'
+        shell: bash
+        run: |
+          B="dist/meridian-mcp-${{ steps.version.outputs.value }}-${{ matrix.label }}.mcpb"
+          python3 packaging/test_mcpb.py
+          python3 packaging/mcpb.py --version "${{ steps.version.outputs.value }}" --label "${{ matrix.label }}" \
+            --binary "target/${{ matrix.target }}/release/${{ matrix.exe }}" --license LICENSE --out "$B"
+          cd dist
+          F="$(basename "$B")"
+          if command -v sha256sum >/dev/null 2>&1; then sha256sum "$F" > "$F.sha256"; else shasum -a 256 "$F" > "$F.sha256"; fi
+          cat "$F.sha256"
+
       - uses: actions/upload-artifact@v4
         with:
           name: meridian-mcp-${{ matrix.label }}
           path: |
             dist/${{ steps.package.outputs.file }}
             dist/${{ steps.package.outputs.file }}.sha256
+            dist/*.mcpb
+            dist/*.mcpb.sha256
           if-no-files-found: error
 
   release:
