@@ -181,7 +181,7 @@ pub struct EvaluateParams {
     /// Directory to save a finished review's markdown report in, used as given. When omitted it is chosen for you:
     /// the `reviews/` folder of the git repository around `repo_path`, or, when `repo_path` holds several
     /// repositories, of its architecture, design, or admin folder, else the `reviews/` folder of `repo_path`; inside
-    /// it, `full/` for a full review and `intermed/` for a change review.
+    /// it, `full/` for a full review and `intermediate/` for a change review.
     pub save_to: Option<String>,
     /// Repository root, used to read the project's version and to build the suggested location.
     /// Defaults to the server's working directory.
@@ -395,7 +395,7 @@ impl MeridianTools {
         `report`, and is saved straight away: in `save_to` if given, otherwise in the `reviews/` \
         folder of the git repository it belongs in (or of an architecture, design, or admin folder when \
         the work spans several repositories), otherwise in the `reviews/` folder of `repo_path`; inside it, a full \
-        review goes in `full/` and a change review in `intermed/`. The saved \
+        review goes in `full/` and a change review in `intermediate/`. The saved \
         file records the project's version at the time of the review; `savedTo` says where it went. A review is priced from the \
         size of the project, so call it first with `quote_only` to see the price and whether the user can afford \
         it (a change review is priced from the size of the change); credits are charged only if the review completes. A full review of a project that holds no source asks first whether the user wants a design-only review or one that also sends the repository's source to check the implementation: ask the user, then pass `include_source`.")]

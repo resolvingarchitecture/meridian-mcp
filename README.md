@@ -106,7 +106,7 @@ server's working directory):
   architecture, design, or admin folder (a folder whose name contains `architecture`, then `design`, then `admin`);
 - otherwise it goes in the `reviews/` folder of `repo_path` (or of the server's working directory).
 
-Inside that `reviews/` folder, full reviews go in `full/` and change (intermediate) reviews in `intermed/`; a `save_to` you
+Inside that `reviews/` folder, full reviews go in `full/` and change (intermediate) reviews in `intermediate/`; a `save_to` you
 give is used exactly as given, with no subfolder. `destinationReason` in the result says why a folder was chosen.
 
 The file is named `<UTC time>-<service>-v<version>.md` (for example `2026-11-17T19-06-45Z-review_full-v1.3.1.md`), so

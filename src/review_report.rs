@@ -6,7 +6,7 @@
 //! `reviews/`; across several repositories it goes in the `reviews/` of an architecture, design, or
 //! admin folder. When neither applies it goes in the `reviews/` folder of the path it was asked about, so a
 //! report is never left in a hidden place. Inside `reviews/`, full reviews go in `full/` and intermediate (change)
-//! reviews in `intermed/`. Every report records the project version at the time of the review in its
+//! reviews in `intermediate/`. Every report records the project version at the time of the review in its
 //! front matter and in its file name, so reports for different versions sit side by side.
 
 use serde_json::Value;
@@ -102,12 +102,12 @@ pub struct Saved {
 /// The folder a project's reviews are saved in: `<project>/reviews`, for example `seda-bus-java/reviews`.
 pub const REVIEWS_DIR: &str = "reviews";
 
-/// The folder inside `reviews/` a service's reports go in: `full` for a full review, `intermed` for a change review.
+/// The folder inside `reviews/` a service's reports go in: `full` for a full review, `intermediate` for a change review.
 /// Any other service has no subfolder.
 pub fn subfolder(service: &str) -> Option<&'static str> {
     match service.trim().to_uppercase().as_str() {
         "REVIEW_FULL" => Some("full"),
-        "REVIEW_INTERMEDIATE" => Some("intermed"),
+        "REVIEW_INTERMEDIATE" => Some("intermediate"),
         _ => None,
     }
 }
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn each_review_service_has_its_own_subfolder() {
         assert_eq!(subfolder("REVIEW_FULL"), Some("full"));
-        assert_eq!(subfolder("review_intermediate"), Some("intermed"));
+        assert_eq!(subfolder("review_intermediate"), Some("intermediate"));
         assert_eq!(subfolder("DESIGN"), None);
         assert_eq!(subfolder(""), None);
     }
