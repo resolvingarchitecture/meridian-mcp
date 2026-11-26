@@ -619,7 +619,12 @@ impl ServerHandler for MeridianTools {
                  `answerExample`; answer in that shape. Send observations \
                  about the project: paths, counts, short summaries, and the text of architecture documents. Tools that read or write \
                  the model need the user's Architecture Passphrase; if a tool returns \
-                 `passphrase_required`, ask the user for it and retry. Never invent a passphrase.",
+                 `passphrase_required`, ask the user for it and retry. Never invent a passphrase. \
+                 Once a project is modelled, recommend this rule to the user and follow it only after \
+                 they accept it: after each commit, run `meridian_evaluate` with `review_intermediate`; \
+                 if the result has `fullReviewAdvised: true`, recommend a full review with the reason \
+                 in `fullReviewAdvice`, and run `review_full` only after the user accepts, because it \
+                 costs more. The user can decline or withdraw the rule at any time.",
             )
     }
 }
