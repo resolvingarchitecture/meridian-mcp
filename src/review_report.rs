@@ -102,7 +102,7 @@ pub struct Saved {
 /// The folder a project's reviews are saved in: `<project>/reviews`, for example `seda-bus-java/reviews`.
 pub const REVIEWS_DIR: &str = "reviews";
 
-/// The folder inside `reviews/` a service's reports go in: `full` for a full review, `intermediate` for a change review.
+/// The folder inside `reviews/` a service's reports go in: `full` for a full review, `intermediate` for an intermediate review.
 /// Any other service has no subfolder.
 pub fn subfolder(service: &str) -> Option<&'static str> {
     match service.trim().to_uppercase().as_str() {

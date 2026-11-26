@@ -12,7 +12,7 @@ Status key: `[x]` done, `[ ]` open. Decisions are in `ADR-AppArch-25`.
 - [x] Review reports (`review_report.rs`): a finished review is saved as `<date>-<service>-v<version>-<id>.md` with
       front matter (project version and its source, model version, evaluation ID, time). Destination: `save_to`, else
       the `reviews/` folder of the git repository around `repo_path`, else the `reviews/` folder of an
-      architecture, design, or admin folder when the work spans several repositories, else the `reviews/` folder of `repo_path`. Inside `reviews/`, a full review goes in `full/` and a change review in `intermediate/` (an explicit `save_to` is used as given).
+      architecture, design, or admin folder when the work spans several repositories, else the `reviews/` folder of `repo_path`. Inside `reviews/`, a full review goes in `full/` and an intermediate review in `intermediate/` (an explicit `save_to` is used as given).
       There is no scratch folder and no move tool (removed in 0.2.0). Never overwrites. `scripts/meridian-mcp-local.sh` runs the client against the local backend.
 
 - [x] `meridian_evaluate` runs `review_intermediate` (0.8.0): `change.rs` collects the git diff (`base` ref, else uncommitted

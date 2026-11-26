@@ -159,7 +159,7 @@ pub struct SubmitParams {
 #[derive(Deserialize, JsonSchema)]
 pub struct EvaluateParams {
     pub project: String,
-    /// Service to run: `review_full` (the whole project) or `review_intermediate` (one change, compared with the
+    /// Service to run: `review_full` (the whole project) or `review_intermediate` (the changes since the last review, compared with the
     /// architecture and the last full review). Other services are not available through the MCP yet.
     pub service: String,
     /// `review_intermediate` only: the git ref (branch, tag, or commit) to review all changes since, committed or
@@ -181,7 +181,7 @@ pub struct EvaluateParams {
     /// Directory to save a finished review's markdown report in, used as given. When omitted it is chosen for you:
     /// the `reviews/` folder of the git repository around `repo_path`, or, when `repo_path` holds several
     /// repositories, of its architecture, design, or admin folder, else the `reviews/` folder of `repo_path`; inside
-    /// it, `full/` for a full review and `intermediate/` for a change review.
+    /// it, `full/` for a full review and `intermediate/` for an intermediate review.
     pub save_to: Option<String>,
     /// Repository root, used to read the project's version and to build the suggested location.
     /// Defaults to the server's working directory.
@@ -387,7 +387,7 @@ impl MeridianTools {
     }
 
     #[tool(description = "Run a Meridian review against the project: `review_full` for the whole project, or \
-        `review_intermediate` for one change (the git diff since `base`, else since the last revision Meridian reviewed, \
+        `review_intermediate` for the changes since the last review (the git diff since `base`, else since the last revision Meridian reviewed, \
         else the uncommitted changes, else the last commit), checked for architectural drift against the model and the last \
         full review; run a full review first. The diff is not stored; after the review the files it touched replace the \
         stored source evidence (deleted ones are removed), so the next change starts from where this one ended. \
@@ -395,10 +395,10 @@ impl MeridianTools {
         `report`, and is saved straight away: in `save_to` if given, otherwise in the `reviews/` \
         folder of the git repository it belongs in (or of an architecture, design, or admin folder when \
         the work spans several repositories), otherwise in the `reviews/` folder of `repo_path`; inside it, a full \
-        review goes in `full/` and a change review in `intermediate/`. The saved \
+        review goes in `full/` and an intermediate review in `intermediate/`. The saved \
         file records the project's version at the time of the review; `savedTo` says where it went. A review is priced from the \
         size of the project, so call it first with `quote_only` to see the price and whether the user can afford \
-        it (a change review is priced from the size of the change); credits are charged only if the review completes. A full review of a project that holds no source asks first whether the user wants a design-only review or one that also sends the repository's source to check the implementation: ask the user, then pass `include_source`.")]
+        it (an intermediate review is priced from the size of the changes); credits are charged only if the review completes. A full review of a project that holds no source asks first whether the user wants a design-only review or one that also sends the repository's source to check the implementation: ask the user, then pass `include_source`.")]
     async fn meridian_evaluate(
         &self,
         p: Parameters<EvaluateParams>,
@@ -481,7 +481,7 @@ impl MeridianTools {
 
         let mut change: Option<crate::change::Change> = None;
         let body = if intermediate {
-            // A change review is priced from the change, so a quote needs it too. The diff is read from the local
+            // An intermediate review is priced from the change, so a quote needs it too. The diff is read from the local
             // repository here and sent for the one review; it is not stored.
             let root = root.as_ref().expect("a root is resolved for an intermediate review");
             let evidence_revision = stored.as_ref().and_then(|e| e.revision.clone());
@@ -705,7 +705,7 @@ fn save_review(reply: Reply, p: &EvaluateParams) -> Reply {
         None => {
             let found = crate::review_report::resolve_destination(&root);
             v["destinationReason"] = json!(found.reason);
-            // Full reviews and change reviews each have a folder inside `reviews/`.
+            // Full reviews and intermediate reviews each have a folder inside `reviews/`.
             match v.get("service").and_then(Value::as_str).and_then(crate::review_report::subfolder) {
                 Some(sub) => found.dir.join(sub),
                 None => found.dir,
