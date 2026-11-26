@@ -48,7 +48,7 @@ def manifest(version, label):
         "version": version,
         "description": "Architecture capture and review for your coding agent.",
         "long_description": DESCRIPTION + " Add it, then ask your agent to set up Meridian: it walks you through signing up "
-                            "(a first purchase of at least 20 USD, paid in Bitcoin from your own wallet). Your architecture "
+                            "(a first purchase of at least 20 USD, paid in Bitcoin from your own wallet), or you can create your account in the web app and pay by card. Your architecture "
                             "model is encrypted under a passphrase only you know.",
         "author": {"name": "Resolving Architecture", "url": "https://resolvingarchitecture.io"},
         "homepage": "https://resolvingarchitecture.io/meridian/",

@@ -28,7 +28,7 @@ By hand, from this package:
 
    On Windows use the full path to meridian-mcp.exe, with doubled backslashes in JSON.
 4. Restart your agent and ask it to set up Meridian. It walks you through signing up (a first
-   purchase of at least 20 USD, paid in Bitcoin from your own wallet). If you already have an API
+   purchase of at least 20 USD, paid in Bitcoin from your own wallet; or create your account in the web app and pay by card, charged in US dollars). If you already have an API
    key, add  "env": { "MERIDIAN_API_KEY": "your-api-key" }  to the same block.
 
 What it does and does not do
