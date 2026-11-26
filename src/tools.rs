@@ -173,6 +173,11 @@ pub struct EvaluateParams {
     /// and false for `review_intermediate`, which updates the evidence from the change it just reviewed (it also
     /// reconciles by itself when history was rewritten).
     pub sync_evidence: Option<bool>,
+    /// `review_full` only, when Meridian holds no source evidence for the project yet: `true` to send the repository's
+    /// source, test and build files first so the review checks the implementation against the design, `false` for a
+    /// design-only review. When this is left out and nothing is held, no review runs: the result asks which one is wanted,
+    /// and you must ask the user and call again with their answer. Never choose for them: sending source is their decision.
+    pub include_source: Option<bool>,
     /// Directory to save a finished review's markdown report in, used as given. When omitted it is chosen for you:
     /// the `reviews/` folder of the git repository around `repo_path`, or, when `repo_path` holds several
     /// repositories, of its architecture, design, or admin folder, else the `reviews/` folder of `repo_path`; inside
@@ -393,7 +398,7 @@ impl MeridianTools {
         review goes in `full/` and a change review in `intermed/`. The saved \
         file records the project's version at the time of the review; `savedTo` says where it went. A review is priced from the \
         size of the project, so call it first with `quote_only` to see the price and whether the user can afford \
-        it (a change review is priced from the size of the change); credits are charged only if the review completes.")]
+        it (a change review is priced from the size of the change); credits are charged only if the review completes. A full review of a project that holds no source asks first whether the user wants a design-only review or one that also sends the repository's source to check the implementation: ask the user, then pass `include_source`.")]
     async fn meridian_evaluate(
         &self,
         p: Parameters<EvaluateParams>,
@@ -424,8 +429,46 @@ impl MeridianTools {
             }
         }
 
+        // A full review of a project that holds no source evidence: the user chooses between a design-only review and one
+        // that also checks the implementation. Nothing is sent and nothing is charged until they have.
+        if sync_flag && !intermediate && stored.as_ref().is_some_and(|e| e.files.is_empty()) {
+            let root = root.as_ref().expect("a root is resolved for a full review that syncs evidence");
+            match p.include_source {
+                None => {
+                    let preview = match crate::change::collect_source(root) {
+                        Ok(set) => json!({ "files": set.files.len(), "kib": set.bytes / 1024, "leftOut": set.left_out }),
+                        Err(e) => json!({ "error": e }),
+                    };
+                    let reply = json!({
+                        "status": "CHOICE_REQUIRED",
+                        "question": "Meridian holds no source for this project. Should the review cover the design only, or also send the repository's source so the implementation is checked against the design?",
+                        "options": [
+                            { "includeSource": false, "label": "Design only",
+                              "note": "Reviews the architecture model and the documents already sent. The implementation is not assessed." },
+                            { "includeSource": true, "label": "Design and implementation",
+                              "note": "Sends the repository's source, test and build files (respecting .gitignore; no build output, dependencies, lock files or binaries), stored encrypted under the project's passphrase, and checks the code against the design. Costs more.",
+                              "wouldSend": preview }
+                        ],
+                        "instruction": "Ask the user which they want, then call meridian_evaluate again with include_source set to their answer. Do not choose for them. Use quote_only to show the price first if they ask."
+                    });
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(reply.to_string())]));
+                }
+                Some(true) => match crate::change::collect_source(root) {
+                    Ok(set) => {
+                        let mut r = self
+                            .push_evidence(&p.project, held.as_deref(), set.files, Vec::new(), Some(set.revision), "before the review (source sent at the user's choice)")
+                            .await;
+                        r["leftOut"] = json!(set.left_out);
+                        sync_report.push(r);
+                    }
+                    Err(e) => return fail(e),
+                },
+                Some(false) => sync_report.push(json!({ "when": "before the review", "note": "design only, at the user's choice; no source was sent" })),
+            }
+        }
+
         // Reconcile what Meridian holds with the files on disk first, when asked (a full review's default).
-        if sync_flag && !intermediate {
+        if sync_flag && !intermediate && stored.as_ref().is_some_and(|e| !e.files.is_empty()) {
             if let (Some(root), Some(evidence)) = (&root, &stored) {
                 match crate::change::reconcile(root, evidence) {
                     Ok(r) => sync_report.push(
@@ -627,7 +670,9 @@ impl ServerHandler for MeridianTools {
                  or correct it. Send each correction or confirmation as the same item again (same id) with \
                  `\"provenance\": \"CONFIRMED\"`. `meridian_next` lists what is still unconfirmed in \
                  `unconfirmed`; do not treat the interview as finished while it is not empty. Never mark \
-                 something CONFIRMED that the user has not seen. \
+                 something CONFIRMED that the user has not seen. Before a first full review, if the \
+                 result is `CHOICE_REQUIRED`, ask the user whether they want a design-only review or \
+                 to send the repository's source as well, and pass their answer as `include_source`. \
                  Once a project is modelled, recommend this rule to the user and follow it only after \
                  they accept it: after each commit, run `meridian_evaluate` with `review_intermediate`; \
                  if the result has `fullReviewAdvised: true`, recommend a full review with the reason \

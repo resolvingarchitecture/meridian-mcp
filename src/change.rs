@@ -403,6 +403,91 @@ pub fn reconcile(repo: &Path, stored: &StoredEvidence) -> Result<Reconcile, Stri
     Ok(Reconcile { files, removed, revision })
 }
 
+/// Most files, and most bytes, sent as source evidence the first time.
+pub const MAX_SOURCE_FILES: usize = 300;
+pub const MAX_SOURCE_BYTES: usize = 2 * 1024 * 1024;
+
+/// What a repository would send as source evidence: its source, test and build files.
+#[derive(Debug)]
+pub struct SourceSet {
+    pub files: Vec<EvidenceFile>,
+    pub revision: String,
+    /// Files that were candidates but did not fit the limits (too many, too much, too large, or not text).
+    pub left_out: usize,
+    pub bytes: usize,
+}
+
+const SOURCE_EXTENSIONS: &[&str] = &[
+    "java", "kt", "rs", "py", "ts", "tsx", "js", "jsx", "go", "c", "h", "cc", "cpp", "hpp", "cs", "rb", "php", "swift",
+    "scala", "sql", "sh", "toml", "xml", "gradle", "properties", "yml", "yaml", "json", "proto", "md",
+];
+const SOURCE_NAMES: &[&str] = &["Dockerfile", "Makefile", "pom.xml", "build.gradle", "Cargo.toml", "package.json", "go.mod"];
+const SKIPPED_DIRS: &[&str] = &[
+    "target/", "node_modules/", "build/", "dist/", "out/", ".git/", ".idea/", "vendor/", "reviews/", "__pycache__/", ".venv/",
+];
+const SKIPPED_NAMES: &[&str] = &["package-lock.json", "yarn.lock", "pnpm-lock.yaml", "Cargo.lock", "go.sum"];
+
+/// Lower is sent first when not everything fits: build files, then main code, then tests, then the rest.
+fn source_rank(path: &str) -> u8 {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    if SOURCE_NAMES.contains(&name) {
+        0
+    } else if path.contains("src/main/") || path.starts_with("src/") && !path.contains("test") {
+        1
+    } else if path.contains("test") {
+        2
+    } else {
+        3
+    }
+}
+
+fn is_source_candidate(path: &str) -> bool {
+    let padded = format!("/{path}");
+    if SKIPPED_DIRS.iter().any(|d| padded.contains(&format!("/{d}"))) {
+        return false;
+    }
+    let name = path.rsplit('/').next().unwrap_or(path);
+    if SKIPPED_NAMES.contains(&name) {
+        return false;
+    }
+    SOURCE_NAMES.contains(&name)
+        || name.rsplit_once('.').map(|(_, ext)| SOURCE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())).unwrap_or(false)
+}
+
+/// The repository's source, test and build files, for the first time source evidence is sent. Honors `.gitignore`, skips
+/// build output, dependencies, lock files, review reports and binary or oversized files, and stops at the limits,
+/// sending build files first, then main code, then tests.
+pub fn collect_source(repo: &Path) -> Result<SourceSet, String> {
+    let top = top(repo)?;
+    let revision = revision_label(&top)?;
+    let mut paths: Vec<String> = git(&top, &["ls-files", "-z", "--cached", "--others", "--exclude-standard"])?
+        .split('\0')
+        .filter(|p| !p.is_empty() && is_source_candidate(p))
+        .map(str::to_owned)
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths.sort_by_key(|p| (source_rank(p), p.clone()));
+    let mut texts: Vec<(String, String)> = Vec::new();
+    let (mut bytes, mut left_out) = (0usize, 0usize);
+    for path in paths {
+        match read_text(&top, &path) {
+            Some(text) if texts.len() < MAX_SOURCE_FILES && bytes + text.len() <= MAX_SOURCE_BYTES => {
+                bytes += text.len();
+                texts.push((path, text));
+            }
+            _ => left_out += 1,
+        }
+    }
+    let hashes = hash_paths(&top, &texts.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>())?;
+    let files = texts
+        .into_iter()
+        .zip(hashes)
+        .map(|((path, content), content_hash)| EvidenceFile { path, content, content_hash })
+        .collect();
+    Ok(SourceSet { files, revision, left_out, bytes })
+}
+
 /// One sync call's worth of files and removals.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Batch {
@@ -461,6 +546,43 @@ mod tests {
 
     fn head(dir: &Path) -> String {
         git(dir, &["rev-parse", "HEAD"]).unwrap().trim().to_owned()
+    }
+
+    #[test]
+    fn source_collection_takes_code_tests_and_build_files_and_skips_the_rest() {
+        let dir = repo();
+        fs::create_dir_all(dir.join("src/main/java")).unwrap();
+        fs::create_dir_all(dir.join("src/test/java")).unwrap();
+        fs::create_dir_all(dir.join("target")).unwrap();
+        fs::create_dir_all(dir.join("reviews/full")).unwrap();
+        fs::write(dir.join("pom.xml"), "<project/>").unwrap();
+        fs::write(dir.join("src/main/java/A.java"), "class A {}").unwrap();
+        fs::write(dir.join("src/test/java/ATest.java"), "class ATest {}").unwrap();
+        fs::write(dir.join("target/B.java"), "class B {}").unwrap();
+        fs::write(dir.join("reviews/full/r.md"), "# old review").unwrap();
+        fs::write(dir.join("image.png"), [0u8, 1, 2]).unwrap();
+        fs::write(dir.join("Cargo.lock"), "lock").unwrap();
+        commit(&dir, "README.md", "hello", "first");
+        let set = collect_source(&dir).unwrap();
+        let paths: Vec<&str> = set.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["pom.xml", "src/main/java/A.java", "src/test/java/ATest.java", "README.md"]);
+        assert!(set.files.iter().all(|f| f.content_hash.len() == 40));
+        assert_eq!(set.left_out, 0);
+    }
+
+    #[test]
+    fn source_collection_honors_gitignore_and_the_file_limit() {
+        let dir = repo();
+        fs::write(dir.join(".gitignore"), "secret.rs\n").unwrap();
+        fs::write(dir.join("secret.rs"), "fn secret() {}").unwrap();
+        for i in 0..(MAX_SOURCE_FILES + 5) {
+            fs::write(dir.join(format!("f{i:04}.rs")), "fn f() {}").unwrap();
+        }
+        commit(&dir, "main.rs", "fn main() {}", "first");
+        let set = collect_source(&dir).unwrap();
+        assert!(set.files.iter().all(|f| f.path != "secret.rs"));
+        assert_eq!(set.files.len(), MAX_SOURCE_FILES);
+        assert_eq!(set.left_out, 6);
     }
 
     #[test]
