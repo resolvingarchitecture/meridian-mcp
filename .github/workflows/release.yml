@@ -60,6 +60,7 @@ jobs:
           mkdir -p "dist/$NAME"
           cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" "dist/$NAME/"
           cp packaging/README.txt "dist/$NAME/README.txt"
+          cp LICENSE "dist/$NAME/LICENSE"
           cd dist
           if [ "${{ matrix.format }}" = "zip" ]; then
             # Python writes standard forward-slash paths; PowerShell's Compress-Archive writes backslashes,

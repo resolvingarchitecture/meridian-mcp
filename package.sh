@@ -27,6 +27,7 @@ rm -rf "${STAGE}" "dist/${NAME}.tar.gz"
 mkdir -p "${STAGE}"
 cp target/release/meridian-mcp "${STAGE}/"
 cp packaging/README.txt "${STAGE}/README.txt"
+cp LICENSE "${STAGE}/LICENSE"
 tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
 rm -rf "${STAGE}"
 (cd dist && sha256sum "${NAME}.tar.gz")

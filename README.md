@@ -206,3 +206,9 @@ smoke-tests a package for the current machine only. The builds are not code-sign
 Scaffold. The MCP handshake and the four tools work end to end against a stub; the backend
 endpoints are specified in `meridian-docs/architecture/mcp-api.md` (v1, proposed) and not built
 yet. See `TODO.md`.
+
+## License
+
+This program is released under the [MIT License](LICENSE). That covers the connector in this repository only: it is the
+open-source client of Meridian. The Meridian service it talks to (the backend, the web app, and your account) is a
+separate, hosted product and is not covered by this license.
