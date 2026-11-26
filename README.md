@@ -119,6 +119,27 @@ The version is read from `pom.xml`, `package.json`, `Cargo.toml`, or `pyproject.
 Call `meridian_projects` first to get the `project` ID. Every other tool takes that `project` and an
 optional `passphrase`; `meridian_projects` needs a passphrase only to create.
 
+## Install
+
+The installers download the build for the machine, check it against the published `SHA256SUMS`, install it for the user
+only, and run `meridian-mcp install`:
+
+```sh
+curl -fsSL https://resolvingarchitecture.io/meridian/install.sh | sh        # Linux and macOS
+irm https://resolvingarchitecture.io/meridian/install.ps1 | iex             # Windows (PowerShell)
+```
+
+`meridian-mcp install` adds Meridian to the MCP configuration of the agents it finds: Claude Code (`~/.claude.json`),
+Claude Desktop, Cursor (`~/.cursor/mcp.json`) and VS Code (`mcp.json` in the user settings folder). It points at the
+program's own full path with `args: ["serve"]`, changes only the `meridian` entry (keeping the user's other keys, their
+order and any `env` they added to it), saves the original once as `<file>.meridian-backup`, writes through a temporary file,
+and leaves a file that is not valid JSON alone and says so. It is safe to run again: a moved program updates the path,
+an unchanged one reports "already set up". `--dry-run` shows what would change, `--agent claude-desktop` (or
+`claude-code`, `cursor`, `vscode`) does one agent, and `--remove` takes Meridian out again. An agent counts as found when
+its configuration file exists (Claude Code) or its settings folder does (the others); nothing is created for an agent
+that is not installed. The installers read the current version from `/meridian/downloads/mcp/LATEST`, which
+`marketing/publish-meridian-mcp.sh` writes; `install.ps1` is not tested in CI.
+
 ## Configuration
 
 | Variable           | Purpose                                          | Default                                              |

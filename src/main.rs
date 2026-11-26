@@ -6,6 +6,7 @@
 mod backend;
 mod change;
 mod config;
+mod install;
 mod review_report;
 mod session;
 mod store;
@@ -27,6 +28,19 @@ struct Cli {
 enum Command {
     /// Run the MCP server on stdio (the default).
     Serve,
+    /// Add Meridian to the MCP configuration of the coding agents found on this machine (Claude Code, Claude Desktop,
+    /// Cursor, VS Code), pointing at this program. Only the `meridian` entry is changed; the original file is saved once.
+    Install {
+        /// Set up only this agent: claude-code, claude-desktop, cursor or vscode.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Say what would change and change nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Take Meridian out of the agents' configuration instead.
+        #[arg(long)]
+        remove: bool,
+    },
 }
 
 #[tokio::main]
@@ -34,6 +48,12 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => serve().await,
+        Command::Install { agent, dry_run, remove } => {
+            let command = std::env::current_exe()?.canonicalize()?;
+            let reports = install::run(&install::Env::current()?, &command, agent.as_deref(), remove, dry_run)?;
+            print!("{}", install::describe(&reports, remove, dry_run));
+            Ok(())
+        }
     }
 }
 
