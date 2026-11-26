@@ -620,6 +620,14 @@ impl ServerHandler for MeridianTools {
                  about the project: paths, counts, short summaries, and the text of architecture documents. Tools that read or write \
                  the model need the user's Architecture Passphrase; if a tool returns \
                  `passphrase_required`, ask the user for it and retry. Never invent a passphrase. \
+                 Business goals, stakeholders, their concerns and decisions that the repository does not \
+                 state may be drafted from what you can see (the README, design documents, the history). \
+                 Draft them, add `\"provenance\": \"INFERRED\"` to each answer so the model marks them as \
+                 unconfirmed, then show the user what you drafted in plain words and ask them to confirm \
+                 or correct it. Send each correction or confirmation as the same item again (same id) with \
+                 `\"provenance\": \"CONFIRMED\"`. `meridian_next` lists what is still unconfirmed in \
+                 `unconfirmed`; do not treat the interview as finished while it is not empty. Never mark \
+                 something CONFIRMED that the user has not seen. \
                  Once a project is modelled, recommend this rule to the user and follow it only after \
                  they accept it: after each commit, run `meridian_evaluate` with `review_intermediate`; \
                  if the result has `fullReviewAdvised: true`, recommend a full review with the reason \
