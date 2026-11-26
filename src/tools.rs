@@ -398,7 +398,7 @@ impl MeridianTools {
         review goes in `full/` and an intermediate review in `intermediate/`. The saved \
         file records the project's version at the time of the review; `savedTo` says where it went. A review is priced from the \
         size of the project, so call it first with `quote_only` to see the price and whether the user can afford \
-        it (an intermediate review is priced from the size of the changes); credits are charged only if the review completes. A full review of a project that holds no source asks first whether the user wants a design-only review or one that also sends the repository's source to check the implementation: ask the user, then pass `include_source`.")]
+        it (an intermediate review is priced from the size of the changes); credits are charged only if the review completes. A full review returns `score` (the alignment to push toward 100) and `progress` (tasks done, new and open since the last full review), and its report lists the tasks as checkboxes under each scorecard area. A full review of a project that holds no source asks first whether the user wants a design-only review or one that also sends the repository's source to check the implementation: ask the user, then pass `include_source`.")]
     async fn meridian_evaluate(
         &self,
         p: Parameters<EvaluateParams>,
