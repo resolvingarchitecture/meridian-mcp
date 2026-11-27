@@ -181,11 +181,6 @@ pub struct Plan {
 /// Works out the file name and project version for a completed evaluation result, from the manifest in
 /// `repo_root` unless `version_override` is given. Writes nothing.
 pub fn plan(repo_root: &Path, version_override: Option<&str>, result: &Value) -> Result<Plan, String> {
-    result
-        .get("report")
-        .and_then(Value::as_str)
-        .filter(|r| !r.trim().is_empty())
-        .ok_or("the result has no report to save")?;
     let (version, source) = match version_override.map(str::trim).filter(|v| !v.is_empty()) {
         Some(v) => (v.to_owned(), "provided".to_owned()),
         None => match fs::canonicalize(repo_root).ok().and_then(|r| detect_version(&r)) {
@@ -193,6 +188,16 @@ pub fn plan(repo_root: &Path, version_override: Option<&str>, result: &Value) ->
             None => ("unknown".to_owned(), "not found".to_owned()),
         },
     };
+    plan_with(version, source, result)
+}
+
+/// The plan for a report whose project version is already known (or known to be unknown).
+fn plan_with(version: String, source: String, result: &Value) -> Result<Plan, String> {
+    result
+        .get("report")
+        .and_then(Value::as_str)
+        .filter(|r| !r.trim().is_empty())
+        .ok_or("the result has no report to save")?;
     let version: String = version.chars().filter(|c| !c.is_control()).collect();
 
     let text = |k: &str| result.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
@@ -222,7 +227,16 @@ fn file_stamp(reviewed_at: &str) -> String {
 /// Writes the report into `dest_dir` (created if needed) and returns where it went, or why not. Never
 /// overwrites an existing file.
 pub fn save(dest_dir: &Path, repo_root: &Path, version_override: Option<&str>, project: &str, result: &Value) -> Result<Saved, String> {
-    let plan = plan(repo_root, version_override, result)?;
+    write(dest_dir, plan(repo_root, version_override, result)?, project, result)
+}
+
+/// Saves a review fetched from the server after it was run. The server does not keep the project's version, and the
+/// manifest today may belong to a later version, so the report records it as not recorded instead of guessing.
+pub fn save_fetched(dest_dir: &Path, project: &str, result: &Value) -> Result<Saved, String> {
+    write(dest_dir, plan_with("unknown".to_owned(), "not recorded".to_owned(), result)?, project, result)
+}
+
+fn write(dest_dir: &Path, plan: Plan, project: &str, result: &Value) -> Result<Saved, String> {
     let report = result.get("report").and_then(Value::as_str).unwrap_or_default();
     if dest_dir.exists() && !dest_dir.is_dir() {
         return Err(format!("{} is not a directory", dest_dir.display()));

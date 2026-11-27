@@ -153,7 +153,7 @@ impl Store {
     }
 }
 
-fn config_dir() -> Option<PathBuf> {
+pub fn config_dir() -> Option<PathBuf> {
     let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
     if let Some(home) = var("MERIDIAN_MCP_HOME") {
         return Some(home);

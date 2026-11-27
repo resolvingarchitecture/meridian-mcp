@@ -11,14 +11,17 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use reqwest::Method;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::backend::{Backend, Reply};
 use crate::session::Session;
 
 pub struct MeridianTools {
-    backend: Backend,
-    session: Session,
+    backend: Arc<Backend>,
+    session: Arc<Session>,
+    /// The projects worked on, whose reviews the background sync keeps in the repository's `reviews/` folder.
+    sync_targets: Arc<crate::review_sync::Targets>,
     store: crate::store::Store,
     /// Why the credential store could not be read at startup, shown by `meridian_setup` so it is not silent.
     store_warning: Option<String>,
@@ -234,7 +237,25 @@ impl MeridianTools {
                 Err(e) => store_warning = Some(e),
             }
         }
-        Self { backend, session, store, store_warning }
+        let (backend, session) = (Arc::new(backend), Arc::new(session));
+        let sync_targets = Arc::new(crate::review_sync::Targets::default());
+        if crate::review_sync::enabled() {
+            crate::review_sync::spawn(
+                backend.clone(),
+                session.clone(),
+                sync_targets.clone(),
+                Arc::new(crate::review_sync::Ledger::open()),
+            );
+        }
+        Self { backend, session, sync_targets, store, store_warning }
+    }
+
+    /// Notes the project being worked on, so reviews run elsewhere reach the repository's `reviews/` folder. A
+    /// `repo_path` the caller gave wins over the working directory.
+    fn watch(&self, project: &str, repo_path: Option<&str>) {
+        if let Ok(root) = repo_root(repo_path) {
+            self.sync_targets.watch(project, root, repo_path.is_some());
+        }
     }
 
     async fn forward(
@@ -359,6 +380,7 @@ impl MeridianTools {
         repeatedly until `done` is true.")]
     async fn meridian_next(&self, p: Parameters<NextParams>) -> Result<CallToolResult, McpError> {
         let p = p.0;
+        self.watch(&p.project, None);
         let idempotent = !p.answers.is_empty();
         self.forward(
             Method::POST,
@@ -375,6 +397,7 @@ impl MeridianTools {
         Model directly; there is no approval step.")]
     async fn meridian_submit(&self, p: Parameters<SubmitParams>) -> Result<CallToolResult, McpError> {
         let p = p.0;
+        self.watch(&p.project, None);
         self.forward(
             Method::POST,
             format!("/projects/{}/submit", p.project),
@@ -404,6 +427,7 @@ impl MeridianTools {
         p: Parameters<EvaluateParams>,
     ) -> Result<CallToolResult, McpError> {
         let p = p.0;
+        self.watch(&p.project, p.repo_path.as_deref());
         let held = self.session.resolve(p.passphrase.clone());
         let intermediate = is_intermediate(&p.service);
         let service = if intermediate { "REVIEW_INTERMEDIATE".to_string() } else { p.service.clone() };
@@ -635,6 +659,7 @@ impl MeridianTools {
         findings, and decisions for the project.")]
     async fn meridian_model(&self, p: Parameters<ModelParams>) -> Result<CallToolResult, McpError> {
         let p = p.0;
+        self.watch(&p.project, None);
         self.forward(
             Method::GET,
             format!("/projects/{}/model?include=completeness,questions,findings,decisions", p.project),

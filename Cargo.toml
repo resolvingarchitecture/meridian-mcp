@@ -1,6 +1,6 @@
 [package]
 name = "meridian-mcp"
-version = "0.10.1"
+version = "0.11.0"
 edition = "2024"
 description = "Meridian connector: an MCP server that lets your coding agent capture, review and track your architecture"
 license = "MIT"
