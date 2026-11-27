@@ -234,7 +234,7 @@ pub async fn sync_project(backend: &Backend, session: &Session, passphrases: &Pa
 }
 
 /// Works out which of the account's projects are the repositories around `start`, without anyone saying so: a project
-/// whose name is the name of the repository `start` is in, or of a repository folder directly under `start` (the
+/// whose name is the name of the repository `start` is in, or of a repository folder a few levels under `start` (the
 /// work spans several), ignoring case. A project that matches nothing is left alone.
 pub fn match_projects(projects: &Value, start: &Path) -> Vec<(String, PathBuf)> {
     let Some(items) = projects.get("projects").and_then(Value::as_array) else { return Vec::new() };
@@ -243,9 +243,7 @@ pub fn match_projects(projects: &Value, start: &Path) -> Vec<(String, PathBuf)> 
     if let Some(root) = start.ancestors().find(|d| d.join(".git").exists()) {
         repos.push(root.to_path_buf());
     }
-    if let Ok(entries) = fs::read_dir(&start) {
-        repos.extend(entries.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.is_dir() && p.join(".git").exists()));
-    }
+    find_repositories(&start, 0, &mut repos);
     let named = |repo: &PathBuf| repo.file_name().map(|n| n.to_string_lossy().to_lowercase());
     items
         .iter()
@@ -256,6 +254,35 @@ pub fn match_projects(projects: &Value, start: &Path) -> Vec<(String, PathBuf)> 
             Some((id.to_owned(), repo.clone()))
         })
         .collect()
+}
+
+/// How far below the working directory a repository is looked for: `~/Apps/ra/seda-bus/seda-bus-java` is two levels
+/// below `~/Apps/ra`.
+const SEARCH_DEPTH: usize = 3;
+
+/// Folders that never hold a project's own repository, however deep, so they are not searched.
+const SKIPPED: [&str; 8] = ["node_modules", "target", "build", "dist", "vendor", "venv", "__pycache__", "site-packages"];
+
+/// The folders under `dir` that are git repositories, down to {@link SEARCH_DEPTH} levels. A repository is not searched
+/// inside, and hidden folders are skipped.
+fn find_repositories(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
+    if depth >= SEARCH_DEPTH {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    let mut folders: Vec<PathBuf> = entries.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.is_dir()).collect();
+    folders.sort();
+    for folder in folders {
+        let name = folder.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        if name.starts_with('.') || SKIPPED.contains(&name.as_str()) {
+            continue;
+        }
+        if folder.join(".git").exists() {
+            found.push(folder);
+        } else {
+            find_repositories(&folder, depth + 1, found);
+        }
+    }
 }
 
 /// Looks the account's projects up and watches those that are the repositories around the connector's working
@@ -385,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fetched_report_lands_in_its_folder_and_records_that_the_version_was_not_kept() {
+    fn a_fetched_report_lands_in_its_folder_without_a_version() {
         let root = temp("write");
         fs::create_dir_all(root.join(".git")).unwrap();
         let review = json!({ "service": "REVIEW_FULL", "evaluationId": "e1", "evaluatedAt": "2026-11-27T05:53:16.805Z",
@@ -395,8 +422,9 @@ mod tests {
 
         assert!(path.to_string_lossy().contains("reviews/full/"), "{path:?}");
         let text = fs::read_to_string(&path).unwrap();
-        assert!(text.contains("evaluation_id: e1") && text.contains("project_version: unknown"), "{text}");
-        assert!(text.contains("version_source: not recorded"), "{text}");
+        assert!(text.contains("evaluation_id: e1"), "{text}");
+        assert!(!text.contains("project_version") && !text.contains("version_source"), "no version to record: {text}");
+        assert!(path.to_string_lossy().ends_with("-review_full.md"), "{path:?}");
         assert_eq!(scan_present(&root.join("reviews")), HashSet::from(["e1".to_owned()]));
     }
 
@@ -558,18 +586,30 @@ mod tests {
             fs::create_dir_all(work.join(repo).join(".git")).unwrap();
         }
         fs::create_dir_all(work.join("not-a-repo")).unwrap();
+        fs::create_dir_all(work.join("group/nested-one/.git")).unwrap();
+        fs::create_dir_all(work.join("group/node_modules/dep/.git")).unwrap();
         let projects = json!({ "projects": [
             { "projectId": "p1", "name": "seda-bus-java" },
             { "projectId": "p2", "name": "meridian-web" },
             { "projectId": "p3", "name": "not-a-repo" },
             { "projectId": "p4", "name": "elsewhere" },
+            { "projectId": "p5", "name": "Nested-One" },
+            { "projectId": "p6", "name": "dep" },
         ]});
 
         let mut found = match_projects(&projects, &work);
         found.sort();
         let canon = |n: &str| fs::canonicalize(work.join(n)).unwrap();
 
-        assert_eq!(found, vec![("p1".to_owned(), canon("seda-bus-java")), ("p2".to_owned(), canon("Meridian-Web"))]);
+        assert_eq!(
+            found,
+            vec![
+                ("p1".to_owned(), canon("seda-bus-java")),
+                ("p2".to_owned(), canon("Meridian-Web")),
+                ("p5".to_owned(), canon("group/nested-one")),
+            ],
+            "a nested repository is found; one inside node_modules is not"
+        );
 
         // From inside a repository, its own name counts.
         let inside = work.join("seda-bus-java");

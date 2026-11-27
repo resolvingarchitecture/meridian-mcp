@@ -6,8 +6,8 @@
 //! `reviews/`; across several repositories it goes in the `reviews/` of an architecture, design, or
 //! admin folder. When neither applies it goes in the `reviews/` folder of the path it was asked about, so a
 //! report is never left in a hidden place. Inside `reviews/`, full reviews go in `full/` and intermediate (change)
-//! reviews in `intermediate/`. Every report records the project version at the time of the review in its
-//! front matter and in its file name, so reports for different versions sit side by side.
+//! reviews in `intermediate/`. Every report is named for the time of the review, and records the project version at
+//! that time in its front matter.
 
 use serde_json::Value;
 use std::fs;
@@ -208,7 +208,7 @@ fn plan_with(version: String, source: String, result: &Value) -> Result<Plan, St
         _ => format!("epoch-{}", SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())),
     };
     let stamp = file_stamp(&reviewed_at);
-    let file_name = format!("{}-{}-v{}.md", sanitize(&stamp), sanitize(&service.to_lowercase()), sanitize(&version));
+    let file_name = format!("{}-{}.md", sanitize(&stamp), sanitize(&service.to_lowercase()));
     Ok(Plan { file_name, version, version_source: source, reviewed_at, service, evaluation_id })
 }
 
@@ -246,10 +246,16 @@ fn write(dest_dir: &Path, plan: Plan, project: &str, result: &Value) -> Result<S
     let path = dest.join(&plan.file_name);
 
     let model_version = result.get("modelVersion").map(|v| v.to_string()).unwrap_or_default();
+    // A review fetched after the fact has no project version to record; say nothing rather than "unknown".
+    let version_lines = if plan.version_source == "not recorded" {
+        String::new()
+    } else {
+        format!("project_version: {}\nversion_source: {}\n", plan.version, plan.version_source)
+    };
     let content = format!(
-        "---\nservice: {}\nproject_version: {}\nversion_source: {}\nreviewed_at: {}\n\
+        "---\nservice: {}\n{version_lines}reviewed_at: {}\n\
          architecture_model_version: {model_version}\nproject_id: {project}\nevaluation_id: {}\n---\n\n{report}\n",
-        plan.service, plan.version, plan.version_source, plan.reviewed_at, plan.evaluation_id
+        plan.service, plan.reviewed_at, plan.evaluation_id
     );
     let mut file = fs::OpenOptions::new()
         .write(true)
@@ -305,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn saves_a_markdown_report_with_the_version_and_never_overwrites() {
+    fn saves_a_markdown_report_with_the_version_in_its_front_matter_and_never_overwrites() {
         let dir = temp("save");
         fs::write(dir.join("pom.xml"), "<project><version>1.3.1</version></project>").unwrap();
         let result = json!({
@@ -316,7 +322,7 @@ mod tests {
         let saved = save(&dir.join(REVIEWS_DIR), &dir, None, "proj-1", &result).unwrap();
 
         assert_eq!(saved.version, "1.3.1");
-        assert!(saved.path.ends_with("reviews/2026-11-17T01-00-00Z-review_full-v1.3.1.md"), "{:?}", saved.path);
+        assert!(saved.path.ends_with("reviews/2026-11-17T01-00-00Z-review_full.md"), "{:?}", saved.path);
         let text = fs::read_to_string(&saved.path).unwrap();
         assert!(text.starts_with("---\nservice: REVIEW_FULL\nproject_version: 1.3.1\nversion_source: pom.xml\n"));
         assert!(text.contains("architecture_model_version: 6"));
@@ -345,7 +351,7 @@ mod tests {
         let dir = temp("plan");
         let result = json!({ "service": "REVIEW_FULL", "evaluationId": "abcdef12", "evaluatedAt": "2026-11-17T01:00:00Z", "report": "r" });
         let planned = plan(&dir, Some("1.0.0"), &result).unwrap();
-        assert_eq!(planned.file_name, "2026-11-17T01-00-00Z-review_full-v1.0.0.md");
+        assert_eq!(planned.file_name, "2026-11-17T01-00-00Z-review_full.md");
         assert_eq!(fs::read_dir(&dir).unwrap().count(), 0, "plan must not write");
 
         let file = dir.join("not-a-dir");
