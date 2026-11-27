@@ -9,6 +9,7 @@ mod config;
 mod install;
 mod review_report;
 mod review_sync;
+mod secrets;
 mod session;
 mod store;
 mod setup;

@@ -22,6 +22,8 @@ pub struct MeridianTools {
     session: Arc<Session>,
     /// The projects worked on, whose reviews the background sync keeps in the repository's `reviews/` folder.
     sync_targets: Arc<crate::review_sync::Targets>,
+    /// The passphrases the operating system's keychain remembers, so reviews can be fetched after a restart.
+    passphrases: crate::secrets::Passphrases,
     store: crate::store::Store,
     /// Why the credential store could not be read at startup, shown by `meridian_setup` so it is not silent.
     store_warning: Option<String>,
@@ -147,6 +149,9 @@ pub struct NextParams {
     pub answers: Vec<Answer>,
     /// The user's Architecture Passphrase. Ask the user if you do not have it.
     pub passphrase: Option<String>,
+    /// The folder of the repository this project is, if it is not the connector's working directory. Reviews run
+    /// elsewhere (in the web app, say) are saved in that repository's `reviews/` folder.
+    pub repo_path: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -157,6 +162,8 @@ pub struct SubmitParams {
     /// Model version from a previous read; the write fails if the model has moved on.
     pub if_match: Option<u64>,
     pub passphrase: Option<String>,
+    /// The folder of the repository this project is, if it is not the connector's working directory.
+    pub repo_path: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -204,6 +211,8 @@ pub struct EvaluateParams {
 pub struct ModelParams {
     pub project: String,
     pub passphrase: Option<String>,
+    /// The folder of the repository this project is, if it is not the connector's working directory.
+    pub repo_path: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -237,17 +246,26 @@ impl MeridianTools {
                 Err(e) => store_warning = Some(e),
             }
         }
+        let api_url = backend.api_url().to_owned();
         let (backend, session) = (Arc::new(backend), Arc::new(session));
-        let sync_targets = Arc::new(crate::review_sync::Targets::default());
+        let passphrases = crate::secrets::Passphrases::os(&api_url);
+        let sync_targets = Arc::new(crate::review_sync::Targets::open(&api_url));
         if crate::review_sync::enabled() {
             crate::review_sync::spawn(
                 backend.clone(),
                 session.clone(),
+                passphrases.clone(),
                 sync_targets.clone(),
                 Arc::new(crate::review_sync::Ledger::open()),
             );
         }
-        Self { backend, session, sync_targets, store, store_warning }
+        Self { backend, session, sync_targets, passphrases, store, store_warning }
+    }
+
+    /// The backend accepted `passphrase` for `project`: note it for this run, and in the keychain for the next.
+    async fn confirmed(&self, project: &str, passphrase: &str) {
+        self.session.confirm(project, passphrase);
+        self.passphrases.remember(project, passphrase).await;
     }
 
     /// Notes the project being worked on, so reviews run elsewhere reach the repository's `reviews/` folder. A
@@ -273,7 +291,12 @@ impl MeridianTools {
             .call(method, &path, body, held.as_deref(), idempotent, if_match)
             .await
         {
-            Reply::Ok(v) => return Ok(CallToolResult::success(vec![ContentBlock::text(v.to_string())])),
+            Reply::Ok(v) => {
+                if let (Some(project), Some(pass)) = (project_of(&path), held.as_deref()) {
+                    self.confirmed(project, pass).await;
+                }
+                return Ok(CallToolResult::success(vec![ContentBlock::text(v.to_string())]));
+            }
             Reply::PassphraseRequired | Reply::PassphraseIncorrect => {
                 let wrong = held.is_some();
                 self.session.clear();
@@ -380,7 +403,7 @@ impl MeridianTools {
         repeatedly until `done` is true.")]
     async fn meridian_next(&self, p: Parameters<NextParams>) -> Result<CallToolResult, McpError> {
         let p = p.0;
-        self.watch(&p.project, None);
+        self.watch(&p.project, p.repo_path.as_deref());
         let idempotent = !p.answers.is_empty();
         self.forward(
             Method::POST,
@@ -397,7 +420,7 @@ impl MeridianTools {
         Model directly; there is no approval step.")]
     async fn meridian_submit(&self, p: Parameters<SubmitParams>) -> Result<CallToolResult, McpError> {
         let p = p.0;
-        self.watch(&p.project, None);
+        self.watch(&p.project, p.repo_path.as_deref());
         self.forward(
             Method::POST,
             format!("/projects/{}/submit", p.project),
@@ -548,6 +571,10 @@ impl MeridianTools {
             .backend
             .call(Method::POST, &path, Some(body), held.as_deref(), true, None)
             .await;
+        // The backend opened the project with it, so the passphrase is right for this project.
+        if let (Reply::Ok(_), Some(pass)) = (&first, held.as_deref()) {
+            self.confirmed(&p.project, pass).await;
+        }
         // A 202 carries an evaluationId; poll until the result is ready.
         let mut result = first;
         if let Reply::Ok(v) = &result {
@@ -659,7 +686,7 @@ impl MeridianTools {
         findings, and decisions for the project.")]
     async fn meridian_model(&self, p: Parameters<ModelParams>) -> Result<CallToolResult, McpError> {
         let p = p.0;
-        self.watch(&p.project, None);
+        self.watch(&p.project, p.repo_path.as_deref());
         self.forward(
             Method::GET,
             format!("/projects/{}/model?include=completeness,questions,findings,decisions", p.project),
@@ -705,6 +732,11 @@ impl ServerHandler for MeridianTools {
                  costs more. The user can decline or withdraw the rule at any time.",
             )
     }
+}
+
+/// The project id in a `/projects/{id}/...` path.
+fn project_of(path: &str) -> Option<&str> {
+    path.strip_prefix("/projects/")?.split(['/', '?']).next().filter(|id| !id.is_empty())
 }
 
 /// Saves a completed review's markdown report: where `save_to` says, else in the `reviews/` of the git
@@ -794,5 +826,19 @@ mod service_name_tests {
         for name in ["review_full", "review", "design", ""] {
             assert!(!is_intermediate(name), "{name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod project_path_tests {
+    use super::project_of;
+
+    #[test]
+    fn the_project_is_read_from_a_project_path() {
+        assert_eq!(project_of("/projects/abc-123/next"), Some("abc-123"));
+        assert_eq!(project_of("/projects/abc-123/model?include=completeness"), Some("abc-123"));
+        assert_eq!(project_of("/projects/abc-123"), Some("abc-123"));
+        assert_eq!(project_of("/account"), None);
+        assert_eq!(project_of("/projects/"), None);
     }
 }

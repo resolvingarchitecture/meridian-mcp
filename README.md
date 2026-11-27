@@ -110,9 +110,15 @@ Inside that `reviews/` folder, full reviews go in `full/` and change (intermedia
 give is used exactly as given, with no subfolder. `destinationReason` in the result says why a folder was chosen.
 
 Reviews run elsewhere, such as from the web app, reach the same folders by themselves: while the connector runs, it checks
-every minute for reviews of the projects you have worked on that no file in `reviews/` records, and saves them. It needs
-the passphrase you gave the agent, never overwrites or deletes a file, and does not bring back a report you deleted.
-Those reports record the project version as unknown. Set `MERIDIAN_REVIEW_SYNC=off` to turn it off.
+every minute for reviews of the projects you have worked on that no file in `reviews/` records, and saves them. It
+works out which of your projects are the repositories around its working directory by name (a project named
+`seda-bus-java` is the repository folder `seda-bus-java`), so nothing has to be set up; `repo_path` on any project call
+overrides it. The connector remembers each project and its folder, so after a restart it picks up where it left off. To fetch a project's reviews it needs that
+project's passphrase. The connector remembers it in your operating system's keychain (Keychain on macOS, Credential
+Manager on Windows, GNOME Keyring or KWallet on Linux) after the backend accepts it, and never in a file of its own. Where
+there is no keychain, it is used only while the connector runs. It never overwrites or deletes a file, and does not bring
+back a report you deleted. Those reports record the project version as unknown. Set `MERIDIAN_REVIEW_SYNC=off` to turn
+the sync off, or `MERIDIAN_REMEMBER_PASSPHRASE=off` to stop the keychain remembering passphrases.
 
 The file is named `<UTC time>-<service>-v<version>.md` (for example `2026-11-17T19-06-45Z-review_full-v1.3.1.md`), so
 reports sort by time and those for different versions sit side by side, and starts with front matter that records the project's version at the time of the review

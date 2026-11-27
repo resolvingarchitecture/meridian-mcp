@@ -7,8 +7,9 @@
 //! file is and whatever it is called.
 //!
 //! Nothing here overwrites or deletes a file, and a review that was present or fetched once is remembered, so a
-//! report the user deletes does not come back. Fetching needs the Architecture Passphrase, which the connector
-//! holds only after the agent supplied it; without one the task waits and never asks.
+//! report the user deletes does not come back. Fetching needs the project's Architecture Passphrase: the one the
+//! backend accepted this run, or the one the operating system's keychain remembers (`secrets.rs`); without one the
+//! task waits and never asks.
 
 use reqwest::Method;
 use serde_json::Value;
@@ -20,6 +21,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Notify;
 
 use crate::backend::{Backend, Reply};
+use crate::secrets::Passphrases;
 use crate::session::Session;
 
 /// How often the server is asked.
@@ -35,14 +37,59 @@ pub fn enabled() -> bool {
     )
 }
 
-/// The projects the connector has worked on, and the folder each one's reports belong under.
+/// The projects the connector has worked on, and the folder each one's reports belong under. Kept on disk (folder
+/// names only, no secrets) so that after a restart the connector still knows what to check.
 #[derive(Default)]
 pub struct Targets {
     map: Mutex<HashMap<String, PathBuf>>,
     wake: Notify,
+    file: Option<(PathBuf, String)>,
 }
 
 impl Targets {
+    /// The targets kept for this backend, if any were saved. They are checked at once.
+    pub fn open(backend_url: &str) -> Self {
+        let file = crate::store::config_dir().map(|d| (d.join("review-sync-targets.json"), backend_url.trim_end_matches('/').to_owned()));
+        let targets = Self { file, ..Self::default() };
+        let saved = targets.read_all().remove(&targets.backend()).unwrap_or_default();
+        if !saved.is_empty() {
+            *targets.map.lock().unwrap_or_else(|e| e.into_inner()) = saved;
+            targets.wake.notify_one();
+        }
+        targets
+    }
+
+    /// A set of targets kept in `path`, for tests.
+    #[cfg(test)]
+    pub fn at(path: PathBuf, backend_url: &str) -> Self {
+        let targets = Self { file: Some((path, backend_url.to_owned())), ..Self::default() };
+        *targets.map.lock().unwrap_or_else(|e| e.into_inner()) = targets.read_all().remove(&targets.backend()).unwrap_or_default();
+        targets
+    }
+
+    fn backend(&self) -> String {
+        self.file.as_ref().map(|(_, b)| b.clone()).unwrap_or_default()
+    }
+
+    fn read_all(&self) -> HashMap<String, HashMap<String, PathBuf>> {
+        self.file
+            .as_ref()
+            .and_then(|(p, _)| fs::read_to_string(p).ok())
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default()
+    }
+
+    fn save(&self, current: &HashMap<String, PathBuf>) {
+        let Some((path, backend)) = &self.file else { return };
+        let mut all = self.read_all();
+        all.insert(backend.clone(), current.clone());
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        // Folder names only; a file that cannot be written just means the next start learns them again.
+        let _ = serde_json::to_string(&all).map(|text| fs::write(path, text));
+    }
+
     /// Notes that `project` is being worked on in `root`. A root the caller named (`explicit`) replaces the one noted
     /// before; otherwise the first one stays. A new or changed target is synced at once.
     pub fn watch(&self, project: &str, root: PathBuf, explicit: bool) {
@@ -53,6 +100,7 @@ impl Targets {
         };
         if changed {
             map.insert(project.to_owned(), root);
+            self.save(&map);
             drop(map);
             self.wake.notify_one();
         }
@@ -119,15 +167,19 @@ fn key(root: &Path) -> String {
 }
 
 /// Starts the background task. It asks about every watched project each minute, and straight away when one is added.
-pub fn spawn(backend: Arc<Backend>, session: Arc<Session>, targets: Arc<Targets>, ledger: Arc<Ledger>) {
+pub fn spawn(backend: Arc<Backend>, session: Arc<Session>, passphrases: Passphrases, targets: Arc<Targets>, ledger: Arc<Ledger>) {
     tokio::spawn(async move {
+        // Learn which projects these repositories are, so nothing depends on the agent saying so.
+        if let Ok(dir) = std::env::current_dir() {
+            discover(&backend, &targets, &dir).await;
+        }
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(POLL) => {}
                 _ = targets.wake.notified() => {}
             }
             for (project, root) in targets.snapshot() {
-                sync_project(&backend, &session, &ledger, &project, &root).await;
+                sync_project(&backend, &session, &passphrases, &ledger, &project, &root).await;
             }
         }
     });
@@ -135,7 +187,7 @@ pub fn spawn(backend: Arc<Backend>, session: Arc<Session>, targets: Arc<Targets>
 
 /// Brings one project's `reviews/` up to date. Returns the files it wrote. Any failure ends this round quietly: the
 /// next round tries again.
-pub async fn sync_project(backend: &Backend, session: &Session, ledger: &Ledger, project: &str, root: &Path) -> Vec<PathBuf> {
+pub async fn sync_project(backend: &Backend, session: &Session, passphrases: &Passphrases, ledger: &Ledger, project: &str, root: &Path) -> Vec<PathBuf> {
     let mut written = Vec::new();
     let Reply::Ok(listed) = backend.call(Method::GET, &format!("/projects/{project}/reviews"), None, None, false, None).await
     else {
@@ -150,7 +202,12 @@ pub async fn sync_project(backend: &Backend, session: &Session, ledger: &Ledger,
     if todo.is_empty() {
         return written;
     }
-    let Some(passphrase) = session.resolve(None) else { return written };
+    // The passphrase of this project: the one the backend accepted this run, else the one the keychain remembers.
+    let passphrase = match session.confirmed(project) {
+        Some(p) => Some(p),
+        None => passphrases.get(project).await,
+    };
+    let Some(passphrase) = passphrase else { return written };
     for id in todo {
         match backend
             .call(Method::GET, &format!("/projects/{project}/reviews/{id}"), None, Some(&passphrase), false, None)
@@ -163,8 +220,10 @@ pub async fn sync_project(backend: &Backend, session: &Session, ledger: &Ledger,
                 }
             }
             Reply::PassphraseRequired | Reply::PassphraseIncorrect => {
-                // A wrong passphrase must not be tried again every minute; the next tool call asks the user.
-                session.clear();
+                // A wrong passphrase must not be tried again every minute: forget it, and the next tool call that
+                // carries the right one is remembered again.
+                session.unconfirm(project);
+                passphrases.forget(project).await;
                 break;
             }
             Reply::Failed(_) => {}
@@ -172,6 +231,42 @@ pub async fn sync_project(backend: &Backend, session: &Session, ledger: &Ledger,
     }
     ledger.remember(root, &seen);
     written
+}
+
+/// Works out which of the account's projects are the repositories around `start`, without anyone saying so: a project
+/// whose name is the name of the repository `start` is in, or of a repository folder directly under `start` (the
+/// work spans several), ignoring case. A project that matches nothing is left alone.
+pub fn match_projects(projects: &Value, start: &Path) -> Vec<(String, PathBuf)> {
+    let Some(items) = projects.get("projects").and_then(Value::as_array) else { return Vec::new() };
+    let start = fs::canonicalize(start).unwrap_or_else(|_| start.to_path_buf());
+    let mut repos: Vec<PathBuf> = Vec::new();
+    if let Some(root) = start.ancestors().find(|d| d.join(".git").exists()) {
+        repos.push(root.to_path_buf());
+    }
+    if let Ok(entries) = fs::read_dir(&start) {
+        repos.extend(entries.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.is_dir() && p.join(".git").exists()));
+    }
+    let named = |repo: &PathBuf| repo.file_name().map(|n| n.to_string_lossy().to_lowercase());
+    items
+        .iter()
+        .filter_map(|p| {
+            let id = p.get("projectId").and_then(Value::as_str)?;
+            let name = p.get("name").and_then(Value::as_str)?.trim().to_lowercase();
+            let repo = repos.iter().find(|r| named(r).as_deref() == Some(name.as_str()))?;
+            Some((id.to_owned(), repo.clone()))
+        })
+        .collect()
+}
+
+/// Looks the account's projects up and watches those that are the repositories around the connector's working
+/// directory, so reviews run elsewhere are saved without the agent having to say which project this is. A project
+/// already watched keeps its folder.
+pub async fn discover(backend: &Backend, targets: &Targets, start: &Path) {
+    if let Reply::Ok(projects) = backend.call(Method::GET, "/projects", None, None, false, None).await {
+        for (project, root) in match_projects(&projects, start) {
+            targets.watch(&project, root, false);
+        }
+    }
 }
 
 fn now_ms() -> i64 {
@@ -356,6 +451,11 @@ mod tests {
         Backend::new(crate::config::Config { api_url: addr.to_owned(), api_key: Some("key".to_owned()) }).unwrap()
     }
 
+    fn passphrases() -> (Passphrases, Arc<crate::secrets::tests::MemoryKeychain>) {
+        let store = Arc::new(crate::secrets::tests::MemoryKeychain::default());
+        (Passphrases::with(store.clone(), "backend"), store)
+    }
+
     #[tokio::test]
     async fn missing_reviews_are_fetched_with_the_passphrase_and_written_once() {
         let (addr, requests) = serve("p1", vec![("e-old", 1), ("e-have", 1)]);
@@ -365,10 +465,11 @@ mod tests {
         fs::write(root.join("reviews/full/have.md"), "---\nevaluation_id: e-have\n---\nx").unwrap();
         let ledger = Ledger::at(Some(temp("l").join("l.json")));
         let session = Session::default();
-        session.resolve(Some("pw".to_owned()));
+        session.confirm("p1", "pw");
+        let (kc, _) = passphrases();
 
-        let first = sync_project(&backend(&addr), &session, &ledger, "p1", &root).await;
-        let second = sync_project(&backend(&addr), &session, &ledger, "p1", &root).await;
+        let first = sync_project(&backend(&addr), &session, &kc, &ledger, "p1", &root).await;
+        let second = sync_project(&backend(&addr), &session, &kc, &ledger, "p1", &root).await;
 
         assert_eq!(first.len(), 1, "{first:?}");
         assert!(fs::read_to_string(&first[0]).unwrap().contains("# Review e-old"));
@@ -385,28 +486,95 @@ mod tests {
         fs::create_dir_all(root.join(".git")).unwrap();
         let ledger = Ledger::at(Some(temp("l2").join("l.json")));
         let session = Session::default();
+        let (kc, _) = passphrases();
 
-        assert!(sync_project(&backend(&addr), &session, &ledger, "p2", &root).await.is_empty());
+        assert!(sync_project(&backend(&addr), &session, &kc, &ledger, "p2", &root).await.is_empty());
         assert!(!requests.lock().unwrap().iter().any(|r| r.contains("/reviews/e1")), "no fetch without a passphrase");
 
-        session.resolve(Some("pw".to_owned()));
-        let written = sync_project(&backend(&addr), &session, &ledger, "p2", &root).await;
+        session.confirm("p2", "pw");
+        let written = sync_project(&backend(&addr), &session, &kc, &ledger, "p2", &root).await;
         assert_eq!(written.len(), 1);
         fs::remove_file(&written[0]).unwrap();
         // The user removed it; it must not return.
-        assert!(sync_project(&backend(&addr), &session, &ledger, "p2", &root).await.is_empty());
+        assert!(sync_project(&backend(&addr), &session, &kc, &ledger, "p2", &root).await.is_empty());
     }
 
     #[tokio::test]
-    async fn a_wrong_passphrase_is_dropped_so_it_is_not_tried_again_every_minute() {
+    async fn after_a_restart_the_keychains_passphrase_is_used_and_another_projects_is_not() {
+        let (addr, requests) = serve("p4", vec![("e1", 1)]);
+        let root = temp("keychain");
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let ledger = Ledger::at(Some(temp("l4").join("l.json")));
+        let session = Session::default();
+        // The agent last used another project's passphrase; it must not be tried on this one.
+        session.confirm("other", "other-pass");
+        let (kc, _) = passphrases();
+        assert!(sync_project(&backend(&addr), &session, &kc, &ledger, "p4", &root).await.is_empty());
+        assert!(!requests.lock().unwrap().iter().any(|r| r.contains("/reviews/e1")));
+
+        kc.remember("p4", "pw").await;
+        let written = sync_project(&backend(&addr), &Session::default(), &kc, &ledger, "p4", &root).await;
+
+        assert_eq!(written.len(), 1, "the remembered passphrase fetched it");
+    }
+
+    #[tokio::test]
+    async fn a_wrong_passphrase_is_forgotten_everywhere_so_it_is_not_tried_again_every_minute() {
         let (addr, _) = serve("p3", vec![("e1", 1)]);
         let root = temp("wrong");
         fs::create_dir_all(root.join(".git")).unwrap();
         let ledger = Ledger::at(Some(temp("l3").join("l.json")));
         let session = Session::default();
-        session.resolve(Some("wrong".to_owned()));
+        session.confirm("p3", "wrong");
+        let (kc, _) = passphrases();
+        kc.remember("p3", "wrong").await;
 
-        assert!(sync_project(&backend(&addr), &session, &ledger, "p3", &root).await.is_empty());
-        assert!(session.resolve(None).is_none(), "the rejected passphrase is forgotten");
+        assert!(sync_project(&backend(&addr), &session, &kc, &ledger, "p3", &root).await.is_empty());
+        assert!(session.confirmed("p3").is_none(), "the rejected passphrase is forgotten in memory");
+        assert!(kc.get("p3").await.is_none(), "and in the keychain");
+    }
+
+    #[test]
+    fn the_projects_and_folders_worked_on_survive_a_restart() {
+        let dir = temp("targets");
+        let file = dir.join("t.json");
+        let first = Targets::at(file.clone(), "https://a.example/api");
+        first.watch("p1", PathBuf::from("/work/one"), false);
+        first.watch("p1", PathBuf::from("/work/ignored"), false);
+        first.watch("p2", PathBuf::from("/work/two"), true);
+        first.watch("p2", PathBuf::from("/work/two-moved"), true);
+
+        let again = Targets::at(file.clone(), "https://a.example/api");
+        let mut seen = again.snapshot();
+        seen.sort();
+        assert_eq!(seen, vec![("p1".to_owned(), PathBuf::from("/work/one")), ("p2".to_owned(), PathBuf::from("/work/two-moved"))]);
+        assert!(Targets::at(file, "https://other.example/api").snapshot().is_empty(), "another backend has its own");
+    }
+
+    #[test]
+    fn projects_are_matched_to_the_repositories_around_the_working_directory_by_name() {
+        let work = temp("match");
+        for repo in ["seda-bus-java", "Meridian-Web", "no-project-for-me"] {
+            fs::create_dir_all(work.join(repo).join(".git")).unwrap();
+        }
+        fs::create_dir_all(work.join("not-a-repo")).unwrap();
+        let projects = json!({ "projects": [
+            { "projectId": "p1", "name": "seda-bus-java" },
+            { "projectId": "p2", "name": "meridian-web" },
+            { "projectId": "p3", "name": "not-a-repo" },
+            { "projectId": "p4", "name": "elsewhere" },
+        ]});
+
+        let mut found = match_projects(&projects, &work);
+        found.sort();
+        let canon = |n: &str| fs::canonicalize(work.join(n)).unwrap();
+
+        assert_eq!(found, vec![("p1".to_owned(), canon("seda-bus-java")), ("p2".to_owned(), canon("Meridian-Web"))]);
+
+        // From inside a repository, its own name counts.
+        let inside = work.join("seda-bus-java");
+        fs::create_dir_all(inside.join("src")).unwrap();
+        assert_eq!(match_projects(&projects, &inside.join("src")), vec![("p1".to_owned(), canon("seda-bus-java"))]);
+        assert!(match_projects(&json!({}), &work).is_empty());
     }
 }

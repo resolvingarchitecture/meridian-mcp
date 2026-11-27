@@ -1,6 +1,6 @@
 [package]
 name = "meridian-mcp"
-version = "0.11.0"
+version = "0.11.1"
 edition = "2024"
 description = "Meridian connector: an MCP server that lets your coding agent capture, review and track your architecture"
 license = "MIT"
@@ -22,6 +22,17 @@ serde_json = { version = "1.0.154", features = ["preserve_order"] }
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "io-std", "io-util"] }
 uuid = { version = "1.29.2", features = ["v4"] }
+
+# The OS keychain holds the Architecture Passphrase between sessions: Keychain on macOS, Credential Manager on Windows,
+# the Secret Service (GNOME Keyring, KWallet) on Linux. The Linux client is pure Rust, so the binary needs no system library.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", default-features = false, features = ["async-secret-service", "tokio", "crypto-rust"] }
 
 [profile.release]
 opt-level = 3

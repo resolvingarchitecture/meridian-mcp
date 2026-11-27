@@ -54,6 +54,11 @@ impl Backend {
         Ok(Self { http, config, api_key })
     }
 
+    /// The backend this client talks to, as configured.
+    pub fn api_url(&self) -> &str {
+        &self.config.api_url
+    }
+
     pub fn set_api_key(&self, key: String) {
         *self.api_key.lock().unwrap_or_else(|e| e.into_inner()) = Some(key);
     }

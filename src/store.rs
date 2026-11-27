@@ -1,6 +1,7 @@
 //! Local credential store: what the client must not lose between sessions (an API key, and the claim secret of a
 //! pay-first sign-up that is waiting for its payment). It never holds model content, and never the Architecture
-//! Passphrase, which stays in memory only (`session.rs`).
+//! Passphrase: that stays in memory (`session.rs`), and the operating system's keychain remembers it between runs
+//! (`secrets.rs`).
 //!
 //! Where: `MERIDIAN_MCP_HOME`, else the user's config directory (`$XDG_CONFIG_HOME` or `~/.config` on Linux,
 //! `~/Library/Application Support` on macOS, `%APPDATA%` on Windows), in a `meridian-mcp` folder.
